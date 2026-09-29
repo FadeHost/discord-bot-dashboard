@@ -1,5 +1,7 @@
 # Discord bot with a dashboard
 
+[![Deploy to FadeHost](https://fadehost.com/deploy-button.svg)](https://laplace.fadehost.com/register?intent=app&repo=https://github.com/FadeHost/discord-bot-dashboard)
+
 [![Deploy on FadeHost](https://img.shields.io/badge/deploy%20on-FadeHost-0ea5e9?style=flat-square)](https://laplace.fadehost.com/bots?new=1)
 
 A welcome and log bot you set up on a web page instead of with slash commands.
