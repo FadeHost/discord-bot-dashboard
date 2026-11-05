@@ -11,7 +11,7 @@ Sugar is the single Discord bot for the Kittisugar community. Keep the product f
 - GitHub is the canonical home for source code, history, and collaboration.
 - FadeHost is the production runtime for the bot. The bot must be able to run continuously on FadeHost without Replit being available.
 - Discord is the community platform and the bot's intended user-facing interface.
-- DeepSeek is the intended AI provider. The current repository does not yet contain a DeepSeek integration; do not describe AI features as live until they are implemented and verified.
+- DeepSeek is the intended AI provider. Its optional integration is implemented; live AI replies require `DEEPSEEK_API_KEY` in FadeHost's secret configuration.
 - Replit is for development only. Do not make production uptime, bot operation, AI calls, persistent state, scheduled work, or required callbacks depend on a Replit project or deployment.
 
 Keep the production bot self-contained on FadeHost. GitHub stores its code; it is not the runtime. Replit may be used to edit, inspect, and test code, but Sugar must stay online when Replit is closed, unavailable, or unused.
@@ -26,7 +26,7 @@ Current-state exception: this repository still contains a web dashboard, Discord
 
 Keep using the existing Discord bot application and its existing bot token. Do not create a replacement application, change the application identity, invalidate or rotate the token, or change its configuration without explicit approval.
 
-Never put secrets, tokens, API keys, passwords, OAuth client secrets, session secrets, or credential-bearing URLs in source code, tests, logs, documentation, commit messages, GitHub issues, or pull requests. Never print or paste secret values into chat. Read credentials only from the hosting platform's secret or environment-variable facility; share variable names, not values. Keep the existing Discord token in FadeHost's secret configuration. Keep any future DeepSeek API key in FadeHost's secret configuration as well. Example environment files may document variable names but must contain only empty or clearly fake placeholders.
+Never put secrets, tokens, API keys, passwords, OAuth client secrets, session secrets, or credential-bearing URLs in source code, tests, logs, documentation, commit messages, GitHub issues, or pull requests. Never print or paste secret values into chat. Read credentials only from the hosting platform's secret or environment-variable facility; share variable names, not values. Keep the existing Discord token and DeepSeek API key in FadeHost's secret configuration. Example environment files may document variable names but must contain only empty or clearly fake placeholders.
 
 ## Hosting and resource limits
 
@@ -40,7 +40,7 @@ Do not move production hosting to Replit. Do not change deployment settings, env
 - Keep modules focused on one responsibility, use clear named exports, and preserve the existing separation between bot events, Discord OAuth/access checks, web routes/views, sessions, and settings storage.
 - Prefer small, readable functions and the existing Node.js and discord.js/Express stack. Avoid adding dependencies or introducing a frontend framework without a concrete need and approval when the change affects product scope.
 - Validate and normalize all settings and external input at module boundaries. Check permissions on the server side; do not trust form fields, command arguments, or cached authorization alone.
-- Use async/await and handle Discord or provider failures without taking down unrelated bot functionality. Add bounded timeouts and safe fallbacks for future external AI calls. Do not send secrets or unnecessary community data to DeepSeek.
+- Use async/await and handle Discord or provider failures without taking down unrelated bot functionality. AI calls must follow local trigger detection and use bounded timeouts and safe fallbacks. Do not send secrets or unnecessary community data to DeepSeek.
 - Add comments for non-obvious security, persistence, or Discord permission behavior. Keep examples and logs free of personal data and credentials.
 
 ## Current repository structure
@@ -52,12 +52,16 @@ Do not move production hosting to Replit. Do not change deployment settings, env
 - index.js — validates startup configuration and starts the settings store, Discord bot, and HTTP server in one Node process.
 - package.json and package-lock.json — runtime requirements, scripts, and locked dependencies.
 - src/bot.js — Discord client, member and message event handlers, welcome messages, log embeds, and postable-channel selection.
+- src/deepseek.js — bounded requests to DeepSeek's official chat-completions API.
+- src/message-handler.js — local message routing, duplicate suppression, concurrency limits, and safe Discord replies.
+- src/message-trigger.js — local-only detection and cleanup of direct Sugar mentions/name addresses.
 - src/oauth.js — Discord OAuth URLs and callback helpers, signed state, token exchange, and guild authorization filtering.
 - src/session.js — in-memory login sessions, signed cookies, CSRF tokens, and cookie helpers.
 - src/settings.js — defaults, settings validation, welcome-template rendering, data-directory selection, and JSON persistence.
 - src/views.js — server-rendered HTML for the current login, server-list, settings, and error pages.
 - src/web.js — Express routes for login, OAuth callback, server settings, logout, and health status.
 - test/dashboard.test.js — unit tests for OAuth helpers, authorization, sessions, settings, templates, and HTML rendering.
+- test/deepseek.test.js and test/message-handler.test.js — mocked provider, local trigger, duplicate, timeout, and limit tests.
 - test/web.test.js — HTTP route tests using a stub Discord client rather than production credentials.
 
 Keep new functionality in the module that owns that responsibility. Avoid turning index.js into a feature module or combining unrelated concerns.
@@ -66,7 +70,7 @@ Keep new functionality in the module that owns that responsibility. Avoid turnin
 
 The current bot greets new members in a configured channel and logs member joins, departures, edited messages, and deleted messages. Welcome templates support user, username, server, and member-count placeholders. Per-server welcome and log channel settings are managed through the existing web dashboard and stored in a JSON file. The dashboard uses Discord OAuth and limits access to servers the signed-in user can manage where the bot is present. A health endpoint reports bot and dashboard status.
 
-The bot uses Discord's Server Members and Message Content privileged intents; the corresponding intents must remain enabled in the existing Discord application for the documented events to work. The current code has no DeepSeek client or AI feature. Any AI implementation must be treated as new functionality, isolated in an appropriate module, configured with a FadeHost secret, and covered by tests before being called live.
+The bot uses Discord's Server Members and Message Content privileged intents; the corresponding intents must remain enabled in the existing Discord application for the documented events to work. The optional DeepSeek feature responds only after a local detector identifies a bot mention or direct address by name; ordinary messages are never sent to DeepSeek for intent detection. It uses bounded message input, API response size, timeout, and concurrent request limits. If `DEEPSEEK_API_KEY` is absent, the bot continues without AI replies.
 
 ## Testing expectations
 

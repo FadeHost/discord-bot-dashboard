@@ -5,6 +5,7 @@
 
 import { ChannelType, Client, EmbedBuilder, Events, GatewayIntentBits, PermissionFlagsBits, Partials } from "discord.js";
 
+import { createMessageResponder } from "./message-handler.js";
 import { renderWelcome } from "./settings.js";
 
 const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf87171 };
@@ -15,9 +16,10 @@ const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf871
  * @param {object} options
  * @param {string} options.token
  * @param {import("./settings.js").SettingsStore} options.settings
+ * @param {(message: string) => Promise<string>} [options.generateReply]
  * @returns {Client}
  */
-export function createBot({ token, settings }) {
+export function createBot({ token, settings, generateReply }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -35,6 +37,16 @@ export function createBot({ token, settings }) {
   client.once(Events.ClientReady, () => {
     console.log(`[bot] logged in as ${client.user.tag} in ${client.guilds.cache.size} server(s)`);
   });
+
+  if (generateReply) {
+    client.on(
+      Events.MessageCreate,
+      createMessageResponder({
+        generateReply,
+        getBotUserId: () => client.user?.id,
+      }),
+    );
+  }
 
   client.on(Events.GuildMemberAdd, async (member) => {
     const config = settings.get(member.guild.id);

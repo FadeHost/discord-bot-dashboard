@@ -4,11 +4,13 @@
 // server on PORT that the FadeHost web address puts on the internet.
 
 import { createBot } from "./src/bot.js";
+import { createDeepSeekClient } from "./src/deepseek.js";
 import { SettingsStore, resolveDataDir } from "./src/settings.js";
 import { createWeb } from "./src/web.js";
 
 const PORT = Number(process.env.PORT || 8080);
 const DISCORD_TOKEN = (process.env.DISCORD_TOKEN || "").trim();
+const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || "").trim();
 const DISCORD_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || "").trim();
 const DISCORD_CLIENT_SECRET = (process.env.DISCORD_CLIENT_SECRET || "").trim();
 const SESSION_SECRET = (process.env.SESSION_SECRET || "").trim();
@@ -39,7 +41,12 @@ const dataDir = resolveDataDir();
 const settings = new SettingsStore(dataDir);
 console.log(`[dashboard] settings in ${dataDir}/settings.json`);
 
-const client = createBot({ token: DISCORD_TOKEN, settings });
+const generateReply = DEEPSEEK_API_KEY ? createDeepSeekClient({ apiKey: DEEPSEEK_API_KEY }) : undefined;
+if (!generateReply) {
+  console.warn("[ai] DEEPSEEK_API_KEY is not set; AI replies are disabled.");
+}
+
+const client = createBot({ token: DISCORD_TOKEN, settings, generateReply });
 
 const { app, redirectUri } = createWeb({
   client,
