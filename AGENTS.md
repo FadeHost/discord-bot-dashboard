@@ -87,3 +87,5 @@ Write durable data atomically, validate it when loading, and keep formats backwa
 ## Change control
 
 Before editing, inspect this AGENTS.md and the relevant source, tests, and current Git diff. Keep changes scoped to the request and list every changed file. Ask for explicit approval before deleting existing functionality, removing or migrating the current dashboard, changing deployment or hosting configuration, changing the existing Discord application or token, or performing a deployment. Do not infer approval for any of those actions from a request to make an unrelated code or documentation change.
+
+Webhook deployment test.
