@@ -42,22 +42,34 @@ anybody back to an address you have not listed.
 | `DISCORD_CLIENT_ID` | yes | From the **OAuth2** page of the same application. |
 | `DISCORD_CLIENT_SECRET` | yes | From the **OAuth2** page. Treat it like a password. |
 | `SESSION_SECRET` | yes | Any long random string. It signs the login cookie. |
+| `DEEPSEEK_API_KEY` | no | Optional. Enables AI replies when set. |
 | `APP_URL` | no | The public address. FadeHost sets it when the web address is on. Set it yourself when running elsewhere. |
 | `PORT` | no | The port to listen on. FadeHost sets this for you. |
+| `DATA_DIR` | no | A writable, persistent directory for settings. Defaults to `/data`, then `./data`. |
 
 Without `APP_URL` the bot still runs; the dashboard just says it has nowhere
 for Discord to send people back to.
 
+### Keeping secrets out of the project
+
+The app reads variables from its process environment; it does not load `.env`
+files. Set production secrets in the host's secret or environment-variable
+manager. `.env.example` contains names and empty values only. Local `.env*`
+files and `.envrc` are ignored by Git, and backup archives exclude them.
+Never place secret values in GitHub, project documents, or backup archives.
+
 ## Run it somewhere else
 
 ```bash
-npm install
-DISCORD_TOKEN=... DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... \
-SESSION_SECRET=$(openssl rand -hex 32) APP_URL=http://localhost:8080 npm start
+npm ci
+npm start
 ```
 
-Add `http://localhost:8080/auth/callback` to the redirects in the Developer
-Portal while you are testing. Node 20 or newer.
+Before starting, provide the required environment variables through your
+operating system or host's secure environment-variable manager. Generate a
+long random `SESSION_SECRET`; do not put secret values in shell history or
+project files. Add `http://localhost:8080/auth/callback` to the redirects in
+the Developer Portal while testing. Node 20 or newer.
 
 ## The welcome message
 
@@ -85,6 +97,48 @@ clicks to fix and means there is nothing on disk worth stealing.
 ```
 /data/settings.json   one entry per server: the two channels and the message
 ```
+
+## Backup and recovery
+
+The app currently has no database. Its durable application data is the
+`settings.json` file in `DATA_DIR`. Point `DATA_DIR` at a persistent disk or
+mounted directory on the host; the default is `/data`, falling back to
+`./data` when `/data` is unavailable. A writable path is not necessarily
+persistent, so confirm the chosen disk survives host restarts and redeploys.
+
+GitHub `main` stores the source history. To make a portable snapshot of the
+project files and current data, run this from the project directory:
+
+```bash
+bash scripts/backup.sh
+```
+
+The archive is written to `~/sugar-backups` by default. To choose another
+location outside the project, pass it as the first argument:
+
+```bash
+bash scripts/backup.sh /path/to/private-backups
+```
+
+The backup includes source, configuration templates, project documents, and
+the selected data directory. It excludes Git internals, installed packages,
+temporary caches, and secret-bearing environment files. Store the archive
+somewhere separate from the host that runs the bot.
+
+To inspect and recover a snapshot, extract it into a new, empty directory:
+
+```bash
+bash scripts/restore.sh /path/to/sugar-ai-YYYYMMDDTHHMMSSZ.tar.gz
+```
+
+An optional second argument selects the restore directory. The script refuses
+to overwrite an existing directory or extract into the live project. Review
+`BACKUP-INFO.txt` and the restored `data/` before using them. For a new host,
+check out the GitHub `main` branch, install with `npm ci`, set the required
+secrets in that host's secret manager, and point `DATA_DIR` at a persistent
+directory. Restore data only into an empty data directory; preserve any
+existing host data before attempting a recovery. Do not copy secrets from an
+archive: they are intentionally not included.
 
 ## Tests
 
