@@ -138,7 +138,7 @@ test("readCookie picks one cookie out of the header", () => {
 
 test("settings survive a new store over the same directory, like a redeploy", () => {
   const dir = tempDir();
-  new SettingsStore(dir).set("941800000000000001", {
+  new SettingsStore(dir, { allowMissing: true }).set("941800000000000001", {
     welcomeChannelId: "941800000000000002",
     welcomeMessage: "Hi {user}",
     logChannelId: "941800000000000003",
@@ -153,7 +153,7 @@ test("settings survive a new store over the same directory, like a redeploy", ()
 });
 
 test("a guild nobody configured gets the defaults", () => {
-  const settings = new SettingsStore(tempDir());
+  const settings = new SettingsStore(tempDir(), { allowMissing: true });
   assert.deepEqual(settings.get("999"), {
     welcomeChannelId: null,
     welcomeMessage: DEFAULT_WELCOME,
@@ -176,7 +176,7 @@ test("a huge welcome message is cut down", () => {
 });
 
 test("nothing outside the three known fields is stored", () => {
-  const settings = new SettingsStore(tempDir());
+  const settings = new SettingsStore(tempDir(), { allowMissing: true });
   const saved = settings.set("941800000000000001", {
     welcomeChannelId: "941800000000000002",
     token: "leak me",
@@ -193,6 +193,26 @@ test("corrupt settings stop loading without changing the file", () => {
 
   assert.throws(() => new SettingsStore(dir), /settings\.json is invalid JSON/);
   assert.equal(fs.readFileSync(file, "utf8"), contents);
+});
+
+test("missing settings stop production startup without creating a file", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "settings.json");
+
+  assert.throws(() => new SettingsStore(dir), /settings\.json is missing/);
+  assert.equal(fs.existsSync(file), false);
+});
+
+test("development may initialize empty settings when the file is missing", () => {
+  const dir = tempDir();
+  const settings = new SettingsStore(dir, { allowMissing: true });
+
+  assert.deepEqual(settings.get("941800000000000001"), {
+    welcomeChannelId: null,
+    welcomeMessage: DEFAULT_WELCOME,
+    logChannelId: null,
+  });
+  assert.equal(fs.existsSync(path.join(dir, "settings.json")), false);
 });
 
 test("settings with an invalid structure stop loading without being rewritten", () => {

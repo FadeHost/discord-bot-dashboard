@@ -77,10 +77,13 @@ function channelId(value) {
 }
 
 export class SettingsStore {
-  /** @param {string} dataDir */
-  constructor(dataDir) {
+  /**
+   * @param {string} dataDir
+   * @param {{allowMissing?: boolean}} [options]
+   */
+  constructor(dataDir, { allowMissing = false } = {}) {
     this.file = path.join(dataDir, "settings.json");
-    this.data = this.#read();
+    this.data = this.#read(allowMissing);
   }
 
   /** @param {string} guildId */
@@ -103,7 +106,7 @@ export class SettingsStore {
     return Object.keys(this.data);
   }
 
-  #read() {
+  #read(allowMissing) {
     let contents;
     try {
       contents = fs.readFileSync(this.file, "utf8");
@@ -114,7 +117,12 @@ export class SettingsStore {
           fs.lstatSync(this.file);
         } catch (statError) {
           if (statError?.code === "ENOENT") {
-            return {};
+            if (allowMissing) {
+              return {};
+            }
+            throw new Error(
+              "settings.json is missing. Startup stopped instead of initializing empty settings. Restore it or create an empty file only for a confirmed new installation.",
+            );
           }
           throw settingsReadError(statError);
         }

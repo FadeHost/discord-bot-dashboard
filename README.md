@@ -101,6 +101,11 @@ clicks to fix and means there is nothing on disk worth stealing.
 /data/settings.json   one entry per server: the two channels and the message
 ```
 
+Production startup requires this file to exist; it will not initialize empty
+settings automatically. Only local development can start without it. For a
+confirmed new production installation, create `{}` in the persistent data
+directory before starting. Do not do this when restoring an existing install.
+
 ## Backup and recovery
 
 The app currently has no database. Its durable application data is the

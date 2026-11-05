@@ -39,7 +39,7 @@ function stubClient() {
 
 async function start() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-web-"));
-  const settings = new SettingsStore(dir);
+  const settings = new SettingsStore(dir, { allowMissing: true });
 
   const { app } = createWeb({
     client: stubClient(),

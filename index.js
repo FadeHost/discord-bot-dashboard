@@ -41,7 +41,7 @@ let dataDir;
 let settings;
 try {
   dataDir = resolveDataDir();
-  settings = new SettingsStore(dataDir);
+  settings = new SettingsStore(dataDir, { allowMissing: process.env.NODE_ENV === "development" });
 } catch (error) {
   fatal(error instanceof Error ? error.message : "Storage initialization failed.", "storage");
 }
