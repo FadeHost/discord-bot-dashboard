@@ -185,9 +185,63 @@ test("nothing outside the three known fields is stored", () => {
   assert.deepEqual(Object.keys(saved).sort(), ["logChannelId", "welcomeChannelId", "welcomeMessage"]);
 });
 
+test("corrupt settings stop loading without changing the file", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "settings.json");
+  const contents = '{"941800000000000001":';
+  fs.writeFileSync(file, contents);
+
+  assert.throws(() => new SettingsStore(dir), /settings\.json is invalid JSON/);
+  assert.equal(fs.readFileSync(file, "utf8"), contents);
+});
+
+test("settings with an invalid structure stop loading without being rewritten", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "settings.json");
+  const contents = JSON.stringify({ "941800000000000001": ["not", "settings"] });
+  fs.writeFileSync(file, contents);
+
+  assert.throws(() => new SettingsStore(dir), /settings\.json has an invalid structure/);
+  assert.equal(fs.readFileSync(file, "utf8"), contents);
+});
+
+test("an unreadable settings path stops loading instead of using empty settings", () => {
+  const dir = tempDir();
+  fs.mkdirSync(path.join(dir, "settings.json"));
+
+  assert.throws(() => new SettingsStore(dir), /Unable to read settings\.json/);
+  assert.equal(fs.statSync(path.join(dir, "settings.json")).isDirectory(), true);
+});
+
 test("resolveDataDir uses the directory it is given", () => {
   const dir = tempDir();
   assert.equal(resolveDataDir(dir), dir);
+});
+
+test("production storage failure does not create or fall back from DATA_DIR", () => {
+  const previousCwd = process.cwd();
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousDataDir = process.env.DATA_DIR;
+  const root = tempDir();
+  const fallback = path.join(root, "data");
+  const missingStorage = path.join(root, "persistent-data");
+  fs.mkdirSync(fallback);
+
+  try {
+    process.chdir(root);
+    process.env.NODE_ENV = "production";
+    process.env.DATA_DIR = missingStorage;
+
+    assert.throws(() => resolveDataDir(), /Persistent storage is unavailable/);
+    assert.equal(fs.existsSync(missingStorage), false);
+    assert.equal(fs.statSync(fallback).isDirectory(), true);
+  } finally {
+    process.chdir(previousCwd);
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDataDir;
+  }
 });
 
 // ---- the welcome message -------------------------------------------------

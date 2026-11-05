@@ -45,7 +45,8 @@ anybody back to an address you have not listed.
 | `DEEPSEEK_API_KEY` | no | Optional. Enables AI replies when set. |
 | `APP_URL` | no | The public address. FadeHost sets it when the web address is on. Set it yourself when running elsewhere. |
 | `PORT` | no | The port to listen on. FadeHost sets this for you. |
-| `DATA_DIR` | no | A writable, persistent directory for settings. Defaults to `/data`, then `./data`. |
+| `DATA_DIR` | no | An existing, writable persistent directory for settings. Production defaults to `/data`. |
+| `NODE_ENV` | no | Set to `development` for local data-directory fallback; other modes require persistent storage. |
 
 Without `APP_URL` the bot still runs; the dashboard just says it has nowhere
 for Discord to send people back to.
@@ -69,7 +70,9 @@ Before starting, provide the required environment variables through your
 operating system or host's secure environment-variable manager. Generate a
 long random `SESSION_SECRET`; do not put secret values in shell history or
 project files. Add `http://localhost:8080/auth/callback` to the redirects in
-the Developer Portal while testing. Node 20 or newer.
+the Developer Portal while testing. For local development, run
+`NODE_ENV=development npm start`; production requires an existing `DATA_DIR`
+or a mounted `/data` directory. Node 20 or newer.
 
 ## The welcome message
 
@@ -102,9 +105,11 @@ clicks to fix and means there is nothing on disk worth stealing.
 
 The app currently has no database. Its durable application data is the
 `settings.json` file in `DATA_DIR`. Point `DATA_DIR` at a persistent disk or
-mounted directory on the host; the default is `/data`, falling back to
-`./data` when `/data` is unavailable. A writable path is not necessarily
-persistent, so confirm the chosen disk survives host restarts and redeploys.
+mounted directory on the host. Outside `NODE_ENV=development`, the app only
+uses an existing `DATA_DIR` or `/data` and stops if that storage is unavailable;
+it never switches to `./data`. Local development may fall back to `./data`.
+A writable path is not necessarily persistent, so confirm the chosen disk
+survives host restarts and redeploys.
 
 GitHub `main` stores the source history. To make a portable snapshot of the
 project files and current data, run this from the project directory:

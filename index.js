@@ -16,8 +16,8 @@ const DISCORD_CLIENT_SECRET = (process.env.DISCORD_CLIENT_SECRET || "").trim();
 const SESSION_SECRET = (process.env.SESSION_SECRET || "").trim();
 const APP_URL = (process.env.APP_URL || "").trim() || undefined;
 
-function fatal(message) {
-  console.error(`[config] ${message}`);
+function fatal(message, category = "config") {
+  console.error(`[${category}] ${message}`);
   process.exit(1);
 }
 
@@ -37,8 +37,14 @@ if (SESSION_SECRET.length < 16) {
   fatal("SESSION_SECRET is missing or too short. Use at least 16 random characters: it signs the login cookie.");
 }
 
-const dataDir = resolveDataDir();
-const settings = new SettingsStore(dataDir);
+let dataDir;
+let settings;
+try {
+  dataDir = resolveDataDir();
+  settings = new SettingsStore(dataDir);
+} catch (error) {
+  fatal(error instanceof Error ? error.message : "Storage initialization failed.", "storage");
+}
 console.log(`[dashboard] settings in ${dataDir}/settings.json`);
 
 const generateReply = DEEPSEEK_API_KEY ? createDeepSeekClient({ apiKey: DEEPSEEK_API_KEY }) : undefined;
