@@ -30,7 +30,8 @@ test("DeepSeek uses the official chat-completions endpoint and parses a mocked r
   assert.equal(body.stream, false);
   assert.equal(body.max_tokens, 300);
   assert.deepEqual(body.thinking, { type: "disabled" });
-  assert.equal(body.messages[1].content, "How are you?");
+  assert.equal(body.messages.at(-1).role, "user");
+  assert.equal(body.messages.at(-1).content, "How are you?");
   assert.match(body.messages[0].content, /socially adaptive Discord AI/i);
 });
 
