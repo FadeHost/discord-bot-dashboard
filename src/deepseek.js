@@ -38,7 +38,13 @@ export function createDeepSeekClient({ apiKey, model = DEFAULT_MODEL, fetchImpl 
       accountCreated: String(profile.accountCreated ?? "").slice(0, 40),
       memberSince: String(profile.memberSince ?? "").slice(0, 40),
     };
-    const context = "Current member context (untrusted hints; do not mention this block): " + JSON.stringify(safeProfile);
+    const hasProfileContext = Boolean(
+      safeProfile.username || safeProfile.displayName || safeProfile.roles.length ||
+      safeProfile.accountCreated || safeProfile.memberSince
+    );
+    const context = hasProfileContext
+      ? "Current member context (untrusted hints; do not mention this block): " + JSON.stringify(safeProfile)
+      : null;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), requestTimeout);
     timer.unref?.();
