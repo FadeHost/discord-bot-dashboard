@@ -16,11 +16,13 @@ import {
 } from "discord.js";
 
 import { MAX_PRIVATE_CHAT_MEMBERS } from "./private-chat-store.js";
+import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { formatPrivateChatChannelName, normalizeCategoryName } from "./private-chat-format.js";
 
 const PREFIX = "private-chat:";
 const COMMAND_NAME = "priv-chat";
-const GUIDE_TITLE = "Create Private Chat 🎀";
+const GUIDE_TITLE = formatEmbedTitle("Create Private Chat");
+const LEGACY_GUIDE_TITLE = "Create Private Chat 🎀";
 const MEMBER_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
@@ -174,7 +176,7 @@ async function ensureLobbyGuide(lobby, client, store) {
     guide = recentMessages.find(
       (message) =>
         message.author.id === client.user.id &&
-        message.embeds.some((embed) => embed.title === GUIDE_TITLE),
+        message.embeds.some((embed) => [GUIDE_TITLE, LEGACY_GUIDE_TITLE].includes(embed.title)),
     );
   }
 
@@ -202,10 +204,10 @@ export function buildPrivateChatLobbyGuidePayload() {
       [
         "A private space for you and the people you invite. Chat with friends or bots, make a list, or use it however you like.",
         "",
-        "**Create a private chat**",
+        toRoyalBold("Create a private chat"),
         "Use the button below, or run `/priv-chat create` and provide a name. You can optionally invite up to five people.",
         "",
-        "**Name format**",
+        toRoyalBold("Name format"),
         "`👤｜9e—your-text—9e°♡`",
         "",
         "Use the **Commands** button or `/priv-chat commands` for instructions.",
@@ -220,11 +222,18 @@ export function buildPrivateChatLobbyGuidePayload() {
   return { embeds: [embed], components: [buttons] };
 }
 
-function privateChatPanel() {
+export function buildPrivateChatWelcomePayload(ownerId, invitees = []) {
+  const memberIds = invitees.map((user) => user.id);
+  const userIds = [ownerId, ...memberIds];
+  const mentions = userIds.map((id) => `<@${id}>`);
+  const welcomeList = mentions.length > 2
+    ? `${mentions.slice(0, -1).join(", ")} and ${mentions.at(-1)}`
+    : mentions.join(" and ");
+  const welcome = `Welcome ${welcomeList}.`;
   const embed = new EmbedBuilder()
     .setColor(0xf472b6)
-    .setTitle("Private Chat Created 🎀")
-    .setDescription("Your private channel is ready. Use the commands or buttons below to manage access and rename the chat.");
+    .setTitle(formatEmbedTitle("Private Chat Created"))
+    .setDescription(`${toRoyalBold("Your private chat is ready!")}\n\n${welcome}`);
 
   const firstRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PREFIX}add`).setLabel("Add people").setStyle(ButtonStyle.Primary),
@@ -236,7 +245,48 @@ function privateChatPanel() {
   const secondRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Commands").setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [firstRow, secondRow] };
+  return {
+    embeds: [embed],
+    components: [firstRow, secondRow],
+    allowedMentions: { parse: [], users: userIds },
+  };
+}
+
+export function buildPrivateChatCommandsPayload() {
+  const embed = new EmbedBuilder()
+    .setColor(0xf472b6)
+    .setTitle(formatEmbedTitle("Private Chat Commands"))
+    .setDescription(toRoyalBold("Use these commands inside this private channel."))
+    .addFields(
+      {
+        name: toRoyalBold("Create"),
+        value: [
+          "`/priv-chat create name:<name>` — Create a private chat.",
+          "Optional invite options: `invite_1` through `invite_5`.",
+        ].join("\n"),
+      },
+      {
+        name: toRoyalBold("Membership"),
+        value: [
+          "`/priv-chat add user:<user>` — Invite a server member. The owner only.",
+          "`/priv-chat remove user:<user>` — Remove an invitee. The owner only.",
+        ].join("\n"),
+      },
+      {
+        name: toRoyalBold("Chat"),
+        value: [
+          "`/priv-chat rename name:<name>` — Rename the channel. The owner only.",
+          "`/priv-chat leave` — Leave the private chat. The owner cannot leave.",
+          "`/priv-chat delete` — Permanently delete the channel and its messages. The owner must confirm.",
+        ].join("\n"),
+      },
+      {
+        name: toRoyalBold("Help"),
+        value: "`/priv-chat commands` — Show the command guide.",
+      },
+    );
+
+  return { embeds: [embed] };
 }
 
 function helpMessage() {
@@ -263,7 +313,7 @@ function isPrivateChatInteraction(interaction) {
   );
 }
 
-async function handlePrivateChatInteraction(interaction, { client, store, lobbyChannelId }) {
+export async function handlePrivateChatInteraction(interaction, { client, store, lobbyChannelId }) {
   if (interaction.isChatInputCommand()) {
     await handleSlashCommand(interaction, { client, store, lobbyChannelId });
   } else if (interaction.isButton()) {
@@ -295,7 +345,7 @@ async function handleSlashCommand(interaction, { client, store, lobbyChannelId }
       const user = interaction.options.getUser(`invite_${index}`);
       if (user) invitees.push(user);
     }
-    const channel = await createPrivateChat(interaction, client, store, displayName, invitees, lobbyChannelId);
+    const channel = await createPrivateChat(interaction, client, store, displayName, invitees);
     return interaction.editReply(`Private chat created: ${channel}`);
   }
 
@@ -441,7 +491,7 @@ async function handleModalSubmit(interaction, { client, store, lobbyChannelId })
     if (!interaction.inGuild() || interaction.channelId !== lobbyChannelId) {
       return interaction.editReply(`Create private chats in <#${lobbyChannelId}>.`);
     }
-    const channel = await createPrivateChat(interaction, client, store, displayName, [], lobbyChannelId);
+    const channel = await createPrivateChat(interaction, client, store, displayName, []);
     return interaction.editReply(`Private chat created: ${channel}`);
   }
 
@@ -476,7 +526,7 @@ function deleteConfirmationRow() {
   );
 }
 
-export async function createPrivateChat(interaction, client, store, displayName, invitees, lobbyChannelId) {
+export async function createPrivateChat(interaction, client, store, displayName, invitees) {
   const channelName = formatPrivateChatChannelName(displayName);
   const inviteeIds = invitees.map((user) => user.id);
   if (new Set(inviteeIds).size !== inviteeIds.length) {
@@ -528,25 +578,18 @@ export async function createPrivateChat(interaction, client, store, displayName,
     throw new Error("The channel was created, but its owner data could not be saved. Ask an admin to check the bot storage.");
   }
 
-  try {
-    await channel.send(privateChatPanel());
-  } catch (error) {
-    console.error(`[private-chats] chat ${channel.id} was created but its control panel could not be posted: ${error.message}`);
-  }
-
-  try {
-    const lobby = await client.channels.fetch(lobbyChannelId);
-    if (!lobby || typeof lobby.send !== "function") {
-      throw new Error(`The private-chat lobby ${lobbyChannelId} is unavailable.`);
+  const creationMessages = [
+    ["welcome", buildPrivateChatWelcomePayload(interaction.user.id, invitees)],
+    ["command guide", buildPrivateChatCommandsPayload()],
+  ];
+  for (const [label, payload] of creationMessages) {
+    try {
+      await channel.send(payload);
+    } catch (error) {
+      console.error(
+        `[private-chats] chat ${channel.id} was created but its ${label} could not be posted: ${error.message}`,
+      );
     }
-    await lobby.send({
-      content: `A new private chat has been created! 🎀\n<#${channel.id}>\nYour private space is ready ♡`,
-      allowedMentions: { parse: [] },
-    });
-  } catch (error) {
-    console.error(
-      `[private-chats] chat ${channel.id} was created but its lobby announcement could not be posted: ${error.message}`,
-    );
   }
   return channel;
 }
@@ -583,7 +626,7 @@ async function fetchGuildMembers(guild, userIds) {
   }
 }
 
-async function addChatMembers(channel, chat, userIds, store, client) {
+export async function addChatMembers(channel, chat, userIds, store, client) {
   const ids = validateMemberIds(chat, userIds, true);
   await fetchGuildMembers(channel.guild, ids);
   if (ids.includes(client.user.id)) throw new Error("Sugar AI already has access to chats it creates.");
@@ -615,10 +658,27 @@ async function addChatMembers(channel, chat, userIds, store, client) {
     }
     throw new Error("Discord could not grant access. No invite was saved; try again or contact an admin.");
   }
+
+  const mentions = ids.map((id) => `<@${id}>`).join(", ");
+  const subjectVerb = ids.length === 1 ? "was added" : "were added";
+  try {
+    await sendPrivateChatActivity(channel, `${mentions} ${subjectVerb} to this private chat.`, ids);
+  } catch (error) {
+    console.error(`[private-chats] could not post the add notice in ${channel.id}: ${error.message}`);
+  }
 }
 
-async function removeChatMembers(channel, chat, userIds, store) {
+export async function removeChatMembers(channel, chat, userIds, store) {
   const ids = validateMemberIds(chat, userIds, false);
+  const mentions = ids.map((id) => `<@${id}>`).join(", ");
+  const verb = ids.length === 1 ? "is" : "are";
+  try {
+    await sendPrivateChatActivity(channel, `${mentions} ${verb} being removed from this private chat.`, ids);
+  } catch (error) {
+    console.error(`[private-chats] could not post the removal notice in ${channel.id}: ${error.message}`);
+    throw new Error("The removal notice could not be posted, so channel access was not changed.");
+  }
+
   const removedOverwrites = [];
   try {
     for (const id of ids) {
@@ -670,7 +730,7 @@ function memberPermissionOptions() {
   };
 }
 
-async function renamePrivateChat(channel, chat, displayName, store) {
+export async function renamePrivateChat(channel, chat, displayName, store) {
   const nextChannelName = formatPrivateChatChannelName(displayName);
   const updated = store.rename(channel.id, displayName);
   try {
@@ -683,7 +743,22 @@ async function renamePrivateChat(channel, chat, displayName, store) {
     }
     throw new Error("Discord could not rename this channel. The previous name was kept.");
   }
+  try {
+    await sendPrivateChatActivity(channel, `This private chat is now named ${nextChannelName}.`);
+  } catch (error) {
+    console.error(`[private-chats] could not post the rename notice in ${channel.id}: ${error.message}`);
+  }
   return updated;
+}
+
+async function sendPrivateChatActivity(channel, content, userIds = []) {
+  return channel.send({
+    content,
+    allowedMentions: {
+      parse: [],
+      ...(userIds.length ? { users: userIds } : {}),
+    },
+  });
 }
 
 function getPrivateChatContext(interaction, store) {

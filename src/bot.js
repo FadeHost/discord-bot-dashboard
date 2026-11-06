@@ -6,6 +6,7 @@
 import { ChannelType, Client, EmbedBuilder, Events, GatewayIntentBits, PermissionFlagsBits, Partials } from "discord.js";
 
 import { createMessageResponder } from "./message-handler.js";
+import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { attachPrivateChatSystem } from "./private-chat-system.js";
 import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
 import { renderWelcome } from "./settings.js";
@@ -190,12 +191,24 @@ async function send(client, channelId, payload) {
 async function log(client, channelId, { title, color, description, fields = [], footer }) {
   if (!channelId) return;
 
-  const embed = new EmbedBuilder().setTitle(title).setColor(color).setTimestamp(new Date());
-  if (description) embed.setDescription(description.slice(0, 4000));
-  if (fields.length) embed.addFields(fields.map((f) => ({ ...f, value: String(f.value).slice(0, 1024) })));
-  if (footer) embed.setFooter({ text: footer });
-
+  const embed = buildLogEmbed({ title, color, description, fields, footer });
   await send(client, channelId, { embeds: [embed] });
+}
+
+export function buildLogEmbed({ title, color, description, fields = [], footer }) {
+  const embed = new EmbedBuilder().setTitle(formatEmbedTitle(title)).setColor(color).setTimestamp(new Date());
+  if (description) embed.setDescription(description.slice(0, 4000));
+  if (fields.length) {
+    embed.addFields(
+      fields.map((field) => ({
+        ...field,
+        name: toRoyalBold(field.name),
+        value: String(field.value).slice(0, 1024),
+      })),
+    );
+  }
+  if (footer) embed.setFooter({ text: footer });
+  return embed;
 }
 
 // Quote somebody's text without letting it pretend to be part of the embed.
