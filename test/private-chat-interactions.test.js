@@ -78,6 +78,7 @@ test("private-chat buttons route to their existing controls", async () => {
   await handlePrivateChatInteraction(commands.interaction, context);
   assert.equal(commands.events[0].type, "reply");
   assert.match(commands.events[0].payload.content, /\/priv-chat add user:/);
+  assert.doesNotMatch(commands.events[0].payload.content, /administrators?/iu);
 
   const add = makeInteraction("add");
   await handlePrivateChatInteraction(add.interaction, { ...context, store: add.store });
