@@ -25,8 +25,10 @@ import { errorPage, guildListPage, guildPage, loginPage } from "./views.js";
  * @param {import("discord.js").Client} options.client
  * @param {import("./settings.js").SettingsStore} options.settings
  * @param {{clientId: string, clientSecret: string, sessionSecret: string, appUrl: string|undefined}} options.config
+ * @param {string} options.version
+ * @param {string} options.startedAt
  */
-export function createWeb({ client, settings, config }) {
+export function createWeb({ client, settings, config, version, startedAt }) {
   const sessions = new Sessions(config.sessionSecret);
   const redirectUri = buildRedirectUri(config.appUrl);
   const secureCookies = Boolean(config.appUrl?.startsWith("https://"));
@@ -222,10 +224,12 @@ export function createWeb({ client, settings, config }) {
 
   app.get("/health", (_req, res) => {
     res.json({
-      ok: Boolean(client.user),
+      ok: true,
       bot: botName(),
       guilds: client.guilds.cache.size,
       dashboard: Boolean(redirectUri),
+      version,
+      startedAt,
     });
   });
 
