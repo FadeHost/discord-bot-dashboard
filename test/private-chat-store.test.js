@@ -49,6 +49,8 @@ test("private-chat metadata persists and supports owner-managed membership and r
   store.removeMembers("123456789012345678", ["423456789012345678"]);
   store.rename("123456789012345678", "Brian Moser");
   store.setLobbyGuideMessageId("623456789012345678", "723456789012345678");
+  store.setProtectedMessageIds("123456789012345678", ["823456789012345678", "923456789012345678"]);
+  store.markClearHistoryPanelReady("123456789012345678");
 
   const restored = new PrivateChatStore(dir);
   assert.deepEqual(restored.get("123456789012345678"), {
@@ -57,8 +59,14 @@ test("private-chat metadata persists and supports owner-managed membership and r
     memberIds: ["523456789012345678"],
     displayName: "Brian Moser",
     createdAt: restored.get("123456789012345678").createdAt,
+    protectedMessageIds: ["823456789012345678", "923456789012345678"],
+    clearHistoryPanelReady: true,
   });
   assert.equal(restored.getLobbyGuideMessageId("623456789012345678"), "723456789012345678");
+  assert.deepEqual(restored.getProtectedMessageIds("123456789012345678"), [
+    "823456789012345678",
+    "923456789012345678",
+  ]);
   assert.equal(restored.listGuild("223456789012345678").length, 1);
   assert.equal(restored.delete("123456789012345678"), true);
   assert.equal(restored.get("123456789012345678"), null);
@@ -102,6 +110,31 @@ test("private-chat store rejects corrupt data without replacing it", (t) => {
   assert.equal(fs.readFileSync(filename, "utf8"), "{");
 });
 
+test("legacy private-chat records without protected message IDs load without being rewritten", (t) => {
+  const directory = makeDirectory(t);
+  const filename = path.join(directory, "private-chats.json");
+  const raw = JSON.stringify({
+    version: 1,
+    chats: {
+      "123456789012345678": {
+        guildId: "223456789012345678",
+        ownerId: "323456789012345678",
+        memberIds: ["423456789012345678"],
+        displayName: "Legacy chat",
+        createdAt: "2026-11-06T00:00:00.000Z",
+      },
+    },
+    lobbyGuideMessageIds: {},
+  });
+  fs.writeFileSync(filename, raw);
+
+  const store = new PrivateChatStore(directory);
+
+  assert.equal(store.getProtectedMessageIds("123456789012345678"), null);
+  assert.equal(store.get("123456789012345678").displayName, "Legacy chat");
+  assert.equal(fs.readFileSync(filename, "utf8"), raw);
+});
+
 test("private-chat names use Discord-safe formatting and match decorative General categories", () => {
   assert.equal(normalizePrivateChatLabel("Brian Moser"), "brian-moser");
   assert.equal(formatPrivateChatChannelName("Brian Moser"), "👤｜9e—𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻—9e°♡");
@@ -115,7 +148,8 @@ test("the lobby creation guide keeps its buttons and uses the 👤 name example"
 
   assert.equal(payload.embeds[0].data.title, `${toRoyalBold("Create Private Chat")} 🎀`);
   assert.match(description, /👤｜9e—your-text—9e°♡/);
-  assert.match(description, new RegExp(toRoyalBold("Create a private chat")));
+  assert.doesNotMatch(description, new RegExp(toRoyalBold("Create a private chat")));
+  assert.match(description, /• Use a button to create a private chat/u);
   assert.match(description, new RegExp(toRoyalBold("Name format")));
   assert.doesNotMatch(description, /\u{1F9CD}|\u2642\uFE0F/u);
   assert.deepEqual(
@@ -151,6 +185,7 @@ test("private-chat creation builders make separate, styled welcome and command e
       "private-chat:leave",
       "private-chat:delete",
       "private-chat:commands",
+      "private-chat:clear-history",
     ],
   );
   assert.equal(guide.embeds[0].data.title, `${toRoyalBold("Private Chat Commands")} 🎀`);
@@ -175,7 +210,13 @@ function makeCreationFixture({ failChannelCreation = false, failStore = false } 
   const events = [];
   const channel = {
     id: "523456789012345678",
-    send: async (payload) => events.push({ type: "private-chat-message", payload }),
+    send: async (payload) => {
+      const messageId = events.filter((event) => event.type === "private-chat-message").length === 0
+        ? "823456789012345678"
+        : "923456789012345678";
+      events.push({ type: "private-chat-message", payload, id: messageId });
+      return { id: messageId };
+    },
     delete: async () => events.push({ type: "channel-deleted" }),
   };
   const category = {
@@ -210,6 +251,10 @@ function makeCreationFixture({ failChannelCreation = false, failStore = false } 
       events.push({ type: "metadata-saved" });
       if (failStore) throw new Error("store write failed");
     },
+    setProtectedMessageIds: (_channelId, messageIds) => {
+      events.push({ type: "protected-message-ids-saved", messageIds });
+    },
+    markClearHistoryPanelReady: (channelId) => events.push({ type: "clear-history-panel-ready", channelId }),
   };
 
   return {
@@ -237,12 +282,23 @@ test("successful private-chat creation posts welcome and command embeds only in 
   assert.equal(channel.id, fixture.channel.id);
   assert.deepEqual(
     fixture.events.map((event) => event.type),
-    ["channel-created", "metadata-saved", "private-chat-message", "private-chat-message"],
+    [
+      "channel-created",
+      "metadata-saved",
+      "private-chat-message",
+      "private-chat-message",
+      "protected-message-ids-saved",
+      "clear-history-panel-ready",
+    ],
   );
   const messages = fixture.events.filter((event) => event.type === "private-chat-message");
   assert.equal(messages[0].payload.embeds[0].data.title, `${toRoyalBold("Private Chat Created")} 🎀`);
   assert.equal(messages[1].payload.embeds[0].data.title, `${toRoyalBold("Private Chat Commands")} 🎀`);
   assert.ok(messages.every((event) => event.payload.embeds.length === 1));
+  assert.deepEqual(
+    fixture.events.find((event) => event.type === "protected-message-ids-saved").messageIds,
+    ["823456789012345678", "923456789012345678"],
+  );
   assert.ok(!fixture.events.some((event) => event.type === "unexpected-channel-fetch"));
   assert.equal(
     fixture.events.find((event) => event.type === "channel-created").options.name,
@@ -304,7 +360,10 @@ test("private channels deny everyone and grant only named members and the bot", 
   assert.ok(overwrites[1].allow.includes(PermissionFlagsBits.ViewChannel));
   assert.ok(overwrites[2].allow.includes(PermissionFlagsBits.SendMessages));
   assert.ok(overwrites[3].allow.includes(PermissionFlagsBits.ManageChannels));
+  assert.ok(overwrites[3].allow.includes(PermissionFlagsBits.ManageMessages));
   assert.ok(!overwrites[1].allow.includes(PermissionFlagsBits.ManageChannels));
+  assert.ok(!overwrites[1].allow.includes(PermissionFlagsBits.ManageMessages));
+  assert.ok(!overwrites[2].allow.includes(PermissionFlagsBits.ManageMessages));
 });
 
 test("adding a member posts a private, mention-enabled notice after access is granted", async () => {
