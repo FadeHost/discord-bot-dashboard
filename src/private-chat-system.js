@@ -179,9 +179,9 @@ async function ensureLobbyGuide(lobby, client, store) {
   }
 
   if (guide) {
-    await guide.edit(lobbyGuidePayload());
+    await guide.edit(buildPrivateChatLobbyGuidePayload());
   } else {
-    guide = await lobby.send(lobbyGuidePayload());
+    guide = await lobby.send(buildPrivateChatLobbyGuidePayload());
   }
 
   store.setLobbyGuideMessageId(lobby.id, guide.id);
@@ -194,7 +194,7 @@ async function ensureLobbyGuide(lobby, client, store) {
   }
 }
 
-function lobbyGuidePayload() {
+export function buildPrivateChatLobbyGuidePayload() {
   const embed = new EmbedBuilder()
     .setColor(0xf472b6)
     .setTitle(GUIDE_TITLE)
@@ -206,7 +206,7 @@ function lobbyGuidePayload() {
         "Use the button below, or run `/priv-chat create` and provide a name. You can optionally invite up to five people.",
         "",
         "**Name format**",
-        "`🧍｜9e—your-text—9e°♡`",
+        "`👤｜9e—your-text—9e°♡`",
         "",
         "Use the **Commands** button or `/priv-chat commands` for instructions.",
         "Server administrators with the **Administrator** permission can still access private channels.",
@@ -295,7 +295,7 @@ async function handleSlashCommand(interaction, { client, store, lobbyChannelId }
       const user = interaction.options.getUser(`invite_${index}`);
       if (user) invitees.push(user);
     }
-    const channel = await createPrivateChat(interaction, client, store, displayName, invitees);
+    const channel = await createPrivateChat(interaction, client, store, displayName, invitees, lobbyChannelId);
     return interaction.editReply(`Private chat created: ${channel}`);
   }
 
@@ -441,7 +441,7 @@ async function handleModalSubmit(interaction, { client, store, lobbyChannelId })
     if (!interaction.inGuild() || interaction.channelId !== lobbyChannelId) {
       return interaction.editReply(`Create private chats in <#${lobbyChannelId}>.`);
     }
-    const channel = await createPrivateChat(interaction, client, store, displayName, []);
+    const channel = await createPrivateChat(interaction, client, store, displayName, [], lobbyChannelId);
     return interaction.editReply(`Private chat created: ${channel}`);
   }
 
@@ -476,7 +476,7 @@ function deleteConfirmationRow() {
   );
 }
 
-async function createPrivateChat(interaction, client, store, displayName, invitees) {
+export async function createPrivateChat(interaction, client, store, displayName, invitees, lobbyChannelId) {
   const channelName = formatPrivateChatChannelName(displayName);
   const inviteeIds = invitees.map((user) => user.id);
   if (new Set(inviteeIds).size !== inviteeIds.length) {
@@ -532,6 +532,21 @@ async function createPrivateChat(interaction, client, store, displayName, invite
     await channel.send(privateChatPanel());
   } catch (error) {
     console.error(`[private-chats] chat ${channel.id} was created but its control panel could not be posted: ${error.message}`);
+  }
+
+  try {
+    const lobby = await client.channels.fetch(lobbyChannelId);
+    if (!lobby || typeof lobby.send !== "function") {
+      throw new Error(`The private-chat lobby ${lobbyChannelId} is unavailable.`);
+    }
+    await lobby.send({
+      content: `A new private chat has been created! 🎀\n<#${channel.id}>\nYour private space is ready ♡`,
+      allowedMentions: { parse: [] },
+    });
+  } catch (error) {
+    console.error(
+      `[private-chats] chat ${channel.id} was created but its lobby announcement could not be posted: ${error.message}`,
+    );
   }
   return channel;
 }
