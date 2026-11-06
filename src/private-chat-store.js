@@ -4,6 +4,7 @@ import path from "node:path";
 export const MAX_PRIVATE_CHAT_MEMBERS = 5;
 export const MAX_PRIVATE_CHATS = 1_000;
 const MAX_DISPLAY_NAME_LENGTH = 40;
+const MAX_PROTECTED_SETUP_MESSAGES = 2;
 
 /**
  * Persistent owner/member metadata for private-chat channels.
@@ -112,6 +113,45 @@ export class PrivateChatStore {
     return copyChat(updated);
   }
 
+  getProtectedMessageIds(channelId) {
+    const channel = snowflake(channelId, "channel");
+    const chat = this.data.chats[channel];
+    if (!chat || !Array.isArray(chat.protectedMessageIds) || chat.protectedMessageIds.length === 0) return null;
+    return [...chat.protectedMessageIds];
+  }
+
+  setProtectedMessageIds(channelId, messageIds) {
+    const channel = snowflake(channelId, "channel");
+    const chat = this.data.chats[channel];
+    if (!chat) throw new Error("This channel is not registered as a private chat.");
+    if (!Array.isArray(messageIds)) throw new Error("A list of protected setup message IDs is required.");
+
+    const ids = messageIds.map((id) => snowflake(id, "message"));
+    if (ids.length > MAX_PROTECTED_SETUP_MESSAGES) {
+      throw new Error("A private chat can protect only its welcome and command-guide messages.");
+    }
+    if (new Set(ids).size !== ids.length) {
+      throw new Error("A protected setup message was listed more than once.");
+    }
+
+    const updated = { ...chat, protectedMessageIds: ids };
+    this.#replaceChat(channel, updated);
+    return [...ids];
+  }
+
+  isClearHistoryPanelReady(channelId) {
+    const channel = snowflake(channelId, "channel");
+    return this.data.chats[channel]?.clearHistoryPanelReady === true;
+  }
+
+  markClearHistoryPanelReady(channelId) {
+    const channel = snowflake(channelId, "channel");
+    const chat = this.data.chats[channel];
+    if (!chat) throw new Error("This channel is not registered as a private chat.");
+
+    this.#replaceChat(channel, { ...chat, clearHistoryPanelReady: true });
+  }
+
   delete(channelId) {
     const channel = snowflake(channelId, "channel");
     if (!this.data.chats[channel]) return false;
@@ -201,7 +241,13 @@ function isValidChat(channelId, chat) {
     chat.displayName.trim().length > 0 &&
     [...chat.displayName].length <= MAX_DISPLAY_NAME_LENGTH &&
     typeof chat.createdAt === "string" &&
-    Number.isFinite(Date.parse(chat.createdAt))
+    Number.isFinite(Date.parse(chat.createdAt)) &&
+    (!Object.hasOwn(chat, "protectedMessageIds") ||
+      (Array.isArray(chat.protectedMessageIds) &&
+        chat.protectedMessageIds.length <= MAX_PROTECTED_SETUP_MESSAGES &&
+        chat.protectedMessageIds.every(isSnowflake) &&
+        new Set(chat.protectedMessageIds).size === chat.protectedMessageIds.length)) &&
+    (!Object.hasOwn(chat, "clearHistoryPanelReady") || typeof chat.clearHistoryPanelReady === "boolean")
   );
 }
 
@@ -235,5 +281,12 @@ function isObject(value) {
 }
 
 function copyChat(chat) {
-  return { ...chat, memberIds: [...chat.memberIds] };
+  return {
+    ...chat,
+    memberIds: [...chat.memberIds],
+    ...(Array.isArray(chat.protectedMessageIds) ? { protectedMessageIds: [...chat.protectedMessageIds] } : {}),
+    ...(typeof chat.clearHistoryPanelReady === "boolean"
+      ? { clearHistoryPanelReady: chat.clearHistoryPanelReady }
+      : {}),
+  };
 }

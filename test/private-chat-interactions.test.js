@@ -9,11 +9,23 @@ const MEMBER_ID = "423456789012345678";
 const CHANNEL_ID = "523456789012345678";
 const GUILD_ID = "623456789012345678";
 
-function makeInteraction(action, { userId = OWNER_ID, memberIds = [MEMBER_ID] } = {}) {
+function makeInteraction(
+  action,
+  {
+    userId = OWNER_ID,
+    memberIds = [MEMBER_ID],
+    history = [],
+    protectedMessageIds = null,
+  } = {},
+) {
   const events = [];
   const channel = {
     id: CHANNEL_ID,
     type: ChannelType.GuildText,
+    permissionsFor: () => ({ has: () => true }),
+    messages: {
+      fetch: async () => new Map(history.filter((message) => !message.deleted).map((message) => [message.id, message])),
+    },
     permissionOverwrites: {
       cache: new Map(memberIds.map((id) => [id, {}])),
       delete: async (id) => events.push({ type: "access-removed", id }),
@@ -29,6 +41,8 @@ function makeInteraction(action, { userId = OWNER_ID, memberIds = [MEMBER_ID] } 
   const store = {
     get: (id) => (id === CHANNEL_ID ? chat : null),
     removeMembers: (_id, ids) => events.push({ type: "members-removed", ids }),
+    getProtectedMessageIds: () => protectedMessageIds,
+    setProtectedMessageIds: (_id, ids) => events.push({ type: "protected-message-ids-saved", ids }),
   };
   const interaction = {
     customId: `private-chat:${action}`,
@@ -44,12 +58,15 @@ function makeInteraction(action, { userId = OWNER_ID, memberIds = [MEMBER_ID] } 
     isModalSubmit: () => false,
     inGuild: () => true,
     reply: async (payload) => events.push({ type: "reply", payload }),
+    update: async (payload) => events.push({ type: "update", payload }),
     showModal: async (modal) => events.push({ type: "modal", modal }),
     deferReply: async () => {
       interaction.deferred = true;
       events.push({ type: "deferred" });
     },
+    deferUpdate: async () => events.push({ type: "deferred-update" }),
     editReply: async (payload) => events.push({ type: "edit-reply", payload }),
+    followUp: async (payload) => events.push({ type: "follow-up", payload }),
   };
   return { events, interaction, store };
 }
@@ -91,10 +108,49 @@ test("private-chat buttons route to their existing controls", async () => {
     deleteChat.events[0].payload.components[0].components[0].data.custom_id,
     "private-chat:delete-confirm",
   );
+
+  const clearPrompt = makeInteraction("clear-history");
+  await handlePrivateChatInteraction(clearPrompt.interaction, {
+    ...context,
+    store: clearPrompt.store,
+  });
+  assert.match(clearPrompt.events[0].payload.content, /welcome and command guide will be kept/i);
+  assert.deepEqual(
+    clearPrompt.events[0].payload.components[0].components.map((button) => button.data.custom_id),
+    ["private-chat:clear-history-confirm", "private-chat:clear-history-cancel"],
+  );
+
+  const ordinaryMessage = {
+    id: "723456789012345678",
+    deleted: false,
+    delete: async () => {
+      ordinaryMessage.deleted = true;
+      clearConfirmation.events.push({ type: "history-deleted" });
+    },
+  };
+  const clearConfirmation = makeInteraction("clear-history-confirm", {
+    history: [ordinaryMessage],
+    protectedMessageIds: ["823456789012345678", "923456789012345678"],
+  });
+  await handlePrivateChatInteraction(clearConfirmation.interaction, {
+    client: { user: { id: "123456789012345678" } },
+    store: clearConfirmation.store,
+    lobbyChannelId: "923456789012345678",
+  });
+  assert.deepEqual(
+    clearConfirmation.events.map((event) => event.type),
+    ["deferred-update", "history-deleted", "follow-up"],
+  );
+  assert.match(clearConfirmation.events.at(-1).payload.content, /1 conversation message was cleared/);
+
+  const clearCancelled = makeInteraction("clear-history-cancel");
+  await handlePrivateChatInteraction(clearCancelled.interaction, context);
+  assert.equal(clearCancelled.events[0].payload.content, "History clearing cancelled.");
+  assert.deepEqual(clearCancelled.events[0].payload.components, []);
 });
 
 test("non-owners cannot use owner-only private-chat buttons", async () => {
-  for (const action of ["add", "remove", "rename", "delete"]) {
+  for (const action of ["add", "remove", "rename", "delete", "clear-history", "clear-history-confirm"]) {
     const { interaction, store } = makeInteraction(action, { userId: MEMBER_ID });
     await assert.rejects(
       handlePrivateChatInteraction(interaction, { client: {}, store, lobbyChannelId: "923456789012345678" }),

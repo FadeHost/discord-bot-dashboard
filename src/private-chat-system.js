@@ -23,6 +23,25 @@ const PREFIX = "private-chat:";
 const COMMAND_NAME = "priv-chat";
 const GUIDE_TITLE = formatEmbedTitle("Create Private Chat");
 const LEGACY_GUIDE_TITLE = "Create Private Chat 🎀";
+const LEGACY_PRIVATE_CHAT_TITLE = "Private Chat Created 🎀";
+const PRIVATE_CHAT_WELCOME_TITLES = new Set([
+  formatEmbedTitle("Private Chat Created"),
+  LEGACY_PRIVATE_CHAT_TITLE,
+]);
+const PRIVATE_CHAT_SETUP_TITLES = new Set([
+  formatEmbedTitle("Private Chat Created"),
+  formatEmbedTitle("Private Chat Commands"),
+  LEGACY_PRIVATE_CHAT_TITLE,
+]);
+const PRIVATE_CHAT_PANEL_CONTROL_IDS = new Set([
+  `${PREFIX}add`,
+  `${PREFIX}remove`,
+  `${PREFIX}rename`,
+  `${PREFIX}leave`,
+  `${PREFIX}delete`,
+  `${PREFIX}commands`,
+  `${PREFIX}clear-history`,
+]);
 const MEMBER_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
   PermissionFlagsBits.SendMessages,
@@ -84,7 +103,7 @@ export function buildPrivateChatPermissionOverwrites({ everyoneId, ownerId, memb
     ...memberIds.map((id) => ({ id, allow: MEMBER_PERMISSIONS })),
     {
       id: botId,
-      allow: [...MEMBER_PERMISSIONS, PermissionFlagsBits.ManageChannels],
+      allow: [...MEMBER_PERMISSIONS, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages],
     },
   ];
 }
@@ -138,6 +157,12 @@ async function initializePrivateChatLobby(client, { token, applicationId, store,
     await ensureLobbyGuide(lobby, client, store);
   } catch (error) {
     console.error(`[private-chats] could not ensure the lobby guide: ${error.message}`);
+  }
+
+  try {
+    await ensurePrivateChatPanels(client, store, lobby.guildId);
+  } catch (error) {
+    console.error(`[private-chats] could not update existing private-chat panels: ${error.message}`);
   }
 }
 
@@ -196,6 +221,47 @@ async function ensureLobbyGuide(lobby, client, store) {
   }
 }
 
+export async function ensurePrivateChatPanels(client, store, guildId) {
+  for (const chat of store.listGuild(guildId)) {
+    try {
+      if (store.isClearHistoryPanelReady(chat.channelId)) continue;
+      const channel = await client.channels.fetch(chat.channelId);
+      if (!channel || channel.type !== ChannelType.GuildText) continue;
+
+      let protectedMessageIds = store.getProtectedMessageIds(chat.channelId);
+      if (protectedMessageIds === null) {
+        protectedMessageIds = await findProtectedSetupMessageIds(channel, client.user.id);
+        if (protectedMessageIds.length) {
+          store.setProtectedMessageIds(chat.channelId, protectedMessageIds);
+        }
+      }
+
+      for (const messageId of protectedMessageIds ?? []) {
+        let message;
+        try {
+          message = await channel.messages.fetch(messageId);
+        } catch (error) {
+          if (error?.code === 10008 || error?.code === 10003) continue;
+          throw error;
+        }
+
+        if (!isPrivateChatWelcomePanelMessage(message, client.user.id)) continue;
+        if (!messageHasPrivateChatButton(message, `${PREFIX}clear-history`)) {
+          const payload = buildPrivateChatWelcomePayload(
+            chat.ownerId,
+            chat.memberIds.map((id) => ({ id })),
+          );
+          await message.edit({ components: payload.components, allowedMentions: { parse: [] } });
+        }
+        store.markClearHistoryPanelReady(chat.channelId);
+        break;
+      }
+    } catch (error) {
+      console.error(`[private-chats] could not update the panel in ${chat.channelId}: ${error.message}`);
+    }
+  }
+}
+
 export function buildPrivateChatLobbyGuidePayload() {
   const embed = new EmbedBuilder()
     .setColor(0xf472b6)
@@ -204,8 +270,7 @@ export function buildPrivateChatLobbyGuidePayload() {
       [
         "A private space for you and the people you invite. Chat with friends or bots, make a list, or use it however you like.",
         "",
-        toRoyalBold("Create a private chat"),
-        "Use the button below, or run `/priv-chat create` and provide a name. You can optionally invite up to five people.",
+        "• Use a button to create a private chat, or run `/priv-chat create` and provide a name. You can optionally invite up to five people.",
         "",
         toRoyalBold("Name format"),
         "`👤｜9e—your-text—9e°♡`",
@@ -244,6 +309,7 @@ export function buildPrivateChatWelcomePayload(ownerId, invitees = []) {
   );
   const secondRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Commands").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PREFIX}clear-history`).setLabel("Clear History").setStyle(ButtonStyle.Danger),
   );
   return {
     embeds: [embed],
@@ -405,6 +471,10 @@ async function handleButton(interaction, { client, store, lobbyChannelId }) {
     return interaction.update({ content: "Deletion cancelled.", components: [], embeds: [] });
   }
 
+  if (action === "clear-history-cancel") {
+    return interaction.update({ content: "History clearing cancelled.", components: [] });
+  }
+
   if (action === "delete-confirm") {
     const context = getPrivateChatContext(interaction, store);
     requireOwner(interaction, context.chat);
@@ -414,7 +484,29 @@ async function handleButton(interaction, { client, store, lobbyChannelId }) {
     return interaction.followUp({ content: "Private chat deleted.", ephemeral: true });
   }
 
+  if (action === "clear-history-confirm") {
+    const context = getPrivateChatContext(interaction, store);
+    requireOwner(interaction, context.chat);
+    await interaction.deferUpdate();
+    const deletedCount = await clearPrivateChatHistory(context.channel, store, client.user);
+    const summary =
+      deletedCount === 1 ? "1 conversation message was cleared." : `${deletedCount} conversation messages were cleared.`;
+    return interaction.followUp({
+      content: `${summary} The welcome and command guide were kept.`,
+      ephemeral: true,
+    });
+  }
+
   const context = getPrivateChatContext(interaction, store);
+
+  if (action === "clear-history") {
+    requireOwner(interaction, context.chat);
+    return sendEphemeral(
+      interaction,
+      "Clear regular conversation messages from this channel? The welcome and command guide will be kept.",
+      [clearHistoryConfirmationRow()],
+    );
+  }
 
   if (action === "add") {
     requireOwner(interaction, context.chat);
@@ -526,6 +618,129 @@ function deleteConfirmationRow() {
   );
 }
 
+function clearHistoryConfirmationRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${PREFIX}clear-history-confirm`)
+      .setLabel("Confirm clear")
+      .setStyle(ButtonStyle.Danger),
+    new ButtonBuilder()
+      .setCustomId(`${PREFIX}clear-history-cancel`)
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+/**
+ * Delete ordinary channel messages while preserving the bot's initial private-chat setup messages.
+ * Persisted message IDs make the protection survive restarts; older chats are indexed from history once.
+ */
+export async function clearPrivateChatHistory(channel, store, botUser) {
+  const permissions = channel.permissionsFor?.(botUser);
+  if (!permissions?.has(PermissionFlagsBits.ManageMessages)) {
+    throw new Error("Sugar needs Manage Messages permission in this private channel to clear history.");
+  }
+
+  let protectedMessageIds = store.getProtectedMessageIds(channel.id);
+  if (protectedMessageIds === null) {
+    protectedMessageIds = await findProtectedSetupMessageIds(channel, botUser.id);
+    store.setProtectedMessageIds(channel.id, protectedMessageIds);
+  }
+  const protectedIds = new Set(protectedMessageIds);
+  let deletedCount = 0;
+  let before;
+
+  // Delete one at a time: bulk deletion can include protected messages and cannot remove older messages.
+  while (true) {
+    const page = await fetchMessagePage(channel, before);
+    if (!page.length) break;
+
+    for (const message of page) {
+      if (protectedIds.has(message.id)) continue;
+      try {
+        await message.delete("Private chat owner cleared conversation history");
+        deletedCount += 1;
+      } catch (error) {
+        if (String(error?.code) === "10008") continue;
+        throw new Error(
+          "Could not clear all conversation messages. Some may already be deleted; verify Sugar has Manage Messages permission and try again.",
+        );
+      }
+    }
+
+    const oldestId = getOldestMessageId(page);
+    if (page.length < 100) break;
+    if (!oldestId || oldestId === before) {
+      throw new Error("Could not safely continue through this channel's message history.");
+    }
+    before = oldestId;
+  }
+
+  return deletedCount;
+}
+
+async function findProtectedSetupMessageIds(channel, botUserId) {
+  const protectedMessageIds = new Set();
+  let before;
+
+  while (true) {
+    const page = await fetchMessagePage(channel, before);
+    if (!page.length) break;
+
+    for (const message of page) {
+      if (isPrivateChatSetupMessage(message, botUserId)) protectedMessageIds.add(message.id);
+    }
+
+    const oldestId = getOldestMessageId(page);
+    if (page.length < 100) break;
+    if (!oldestId || oldestId === before) {
+      throw new Error("Could not safely locate the private-chat setup messages.");
+    }
+    before = oldestId;
+  }
+
+  return [...protectedMessageIds].sort((first, second) => (BigInt(first) < BigInt(second) ? -1 : 1));
+}
+
+async function fetchMessagePage(channel, before) {
+  const options = before ? { limit: 100, before } : { limit: 100 };
+  const messages = await channel.messages.fetch(options);
+  return [...messages.values()];
+}
+
+function getOldestMessageId(messages) {
+  if (!messages.length) return null;
+  return messages.reduce(
+    (oldest, message) => (BigInt(message.id) < BigInt(oldest) ? message.id : oldest),
+    messages[0].id,
+  );
+}
+
+function isPrivateChatSetupMessage(message, botUserId) {
+  if (message.author?.id !== botUserId) return false;
+  if (message.embeds?.some((embed) => PRIVATE_CHAT_SETUP_TITLES.has(embed.title))) return true;
+  return messageHasPrivateChatButton(message);
+}
+
+function isPrivateChatWelcomePanelMessage(message, botUserId) {
+  if (message.author?.id !== botUserId) return false;
+  return (
+    message.embeds?.some((embed) => PRIVATE_CHAT_WELCOME_TITLES.has(embed.title)) ||
+    messageHasPrivateChatButton(message)
+  );
+}
+
+function messageHasPrivateChatButton(message, targetCustomId) {
+  return (
+    message.components?.some((row) =>
+      row.components?.some((component) => {
+        const customId = component.customId ?? component.custom_id ?? component.data?.custom_id;
+        return targetCustomId ? customId === targetCustomId : PRIVATE_CHAT_PANEL_CONTROL_IDS.has(customId);
+      }),
+    ) ?? false
+  );
+}
+
 export async function createPrivateChat(interaction, client, store, displayName, invitees) {
   const channelName = formatPrivateChatChannelName(displayName);
   const inviteeIds = invitees.map((user) => user.id);
@@ -582,13 +797,26 @@ export async function createPrivateChat(interaction, client, store, displayName,
     ["welcome", buildPrivateChatWelcomePayload(interaction.user.id, invitees)],
     ["command guide", buildPrivateChatCommandsPayload()],
   ];
+  const protectedMessageIds = [];
+  let setupMessagesComplete = true;
   for (const [label, payload] of creationMessages) {
     try {
-      await channel.send(payload);
+      const message = await channel.send(payload);
+      if (message?.id) protectedMessageIds.push(message.id);
+      else setupMessagesComplete = false;
     } catch (error) {
+      setupMessagesComplete = false;
       console.error(
         `[private-chats] chat ${channel.id} was created but its ${label} could not be posted: ${error.message}`,
       );
+    }
+  }
+  if (setupMessagesComplete && protectedMessageIds.length === creationMessages.length) {
+    try {
+      store.setProtectedMessageIds(channel.id, protectedMessageIds);
+      store.markClearHistoryPanelReady(channel.id);
+    } catch (error) {
+      console.error(`[private-chats] setup-message IDs for ${channel.id} could not be saved: ${error.message}`);
     }
   }
   return channel;
