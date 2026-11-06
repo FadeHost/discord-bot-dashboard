@@ -6,6 +6,8 @@
 import { ChannelType, Client, EmbedBuilder, Events, GatewayIntentBits, PermissionFlagsBits, Partials } from "discord.js";
 
 import { createMessageResponder } from "./message-handler.js";
+import { attachPrivateChatSystem } from "./private-chat-system.js";
+import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
 import { renderWelcome } from "./settings.js";
 
 const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf87171 };
@@ -15,11 +17,13 @@ const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf871
  *
  * @param {object} options
  * @param {string} options.token
+ * @param {string} options.applicationId
  * @param {import("./settings.js").SettingsStore} options.settings
+ * @param {import("./private-chat-store.js").PrivateChatStore} options.privateChats
  * @param {(message: string) => Promise<string>} [options.generateReply]
  * @returns {Client}
  */
-export function createBot({ token, settings, generateReply, memory }) {
+export function createBot({ token, applicationId, settings, generateReply, memory, privateChats }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -118,6 +122,13 @@ export function createBot({ token, settings, generateReply, memory }) {
   });
 
   client.on(Events.Error, (error) => console.error(`[bot] ${error.message}`));
+
+  attachPrivateChatSystem(client, {
+    token,
+    applicationId,
+    store: privateChats,
+    lobbyChannelId: PRIVATE_CHAT_LOBBY_CHANNEL_ID,
+  });
 
   client.login(token).catch((error) => {
     if (String(error?.code) === "TokenInvalid" || String(error).includes("TOKEN_INVALID")) {
