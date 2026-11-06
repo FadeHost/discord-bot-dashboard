@@ -136,7 +136,7 @@ test("a direct reply to Sugar triggers a response and passes member context", as
   incoming.member = {
     displayName: "Kitti",
     joinedAt: new Date("2025-01-01T00:00:00.000Z"),
-    roles: { cache: new Map([["role-1", { name: "Member" }]]) },
+    roles: { cache: [{ name: "Member" }] },
   };
   incoming.author = {
     id: "user-1",
