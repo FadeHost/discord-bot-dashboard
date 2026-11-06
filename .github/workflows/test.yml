@@ -21,3 +21,23 @@ jobs:
         run: npm ci
       - name: Run tests
         run: npm test
+
+  verify-fadehost:
+    name: Verify FadeHost deployment
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out deployed commit
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Wait for FadeHost to serve this commit
+        run: node scripts/verify-deployment-health.js
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          FADEHOST_HEALTH_URL: https://sugar.fadehost.app/health

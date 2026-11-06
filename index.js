@@ -5,10 +5,13 @@
 
 import { createBot } from "./src/bot.js";
 import { createDeepSeekClient } from "./src/deepseek.js";
+import { resolveDeploymentVersion } from "./src/deployment-version.js";
 import { SettingsStore, resolveDataDir } from "./src/settings.js";
 import { MemoryStore } from "./src/memory.js";
 import { createWeb } from "./src/web.js";
 
+const STARTED_AT = new Date().toISOString();
+const VERSION = resolveDeploymentVersion();
 const PORT = Number(process.env.PORT || 8080);
 const DISCORD_TOKEN = (process.env.DISCORD_TOKEN || "").trim();
 const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || "").trim();
@@ -66,6 +69,8 @@ const { app, redirectUri } = createWeb({
     sessionSecret: SESSION_SECRET,
     appUrl: APP_URL,
   },
+  version: VERSION,
+  startedAt: STARTED_AT,
 });
 
 // 0.0.0.0, because the web address reaches this container from outside it.
