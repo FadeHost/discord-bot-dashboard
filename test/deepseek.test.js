@@ -62,7 +62,12 @@ test("DeepSeek request timeout aborts the request", async () => {
     },
   });
 
-  await assert.rejects(generateReply("Hi"), /timed out/);
+  const keepEventLoopAlive = setTimeout(() => {}, 1_000);
+  try {
+    await assert.rejects(generateReply("Hi"), /timed out/);
+  } finally {
+    clearTimeout(keepEventLoopAlive);
+  }
   assert.equal(signal.aborted, true);
 });
 
