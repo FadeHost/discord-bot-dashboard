@@ -22,6 +22,7 @@ import {
   buildPrivateChatPermissionOverwrites,
   buildPrivateChatWelcomePayload,
   createPrivateChat,
+  handlePrivateChatInteraction,
   addChatMembers,
   removeChatMembers,
   renamePrivateChat,
@@ -150,11 +151,19 @@ test("the lobby creation guide keeps its buttons and uses the 👤 name example"
   assert.match(description, /👤｜9e—your-text—9e°♡/);
   assert.doesNotMatch(description, new RegExp(toRoyalBold("Create a private chat")));
   assert.match(description, /• Use a button to create a private chat/u);
+  assert.ok(
+    description.includes("Instructions inside the chat are available from the **Instructions** button or `/priv-chat commands`."),
+  );
+  assert.doesNotMatch(description, /administrators?/iu);
   assert.match(description, new RegExp(toRoyalBold("Name format")));
   assert.doesNotMatch(description, /\u{1F9CD}|\u2642\uFE0F/u);
   assert.deepEqual(
     payload.components[0].components.map((button) => button.data.custom_id),
     ["private-chat:create", "private-chat:commands"],
+  );
+  assert.deepEqual(
+    payload.components[0].components.map((button) => button.data.label),
+    ["Create private chat", "Instructions"],
   );
 });
 
@@ -188,9 +197,13 @@ test("private-chat creation builders make separate, styled welcome and command e
       "private-chat:clear-history",
     ],
   );
+  assert.equal(welcome.components[1].components[0].data.label, "Instructions");
   assert.equal(guide.embeds[0].data.title, `${toRoyalBold("Private Chat Commands")} 🎀`);
+  assert.equal(guide.embeds[0].data.description, "Use these commands inside this private channel");
+  assert.doesNotMatch(guide.embeds[0].data.description, new RegExp(toRoyalBold("Use these commands inside this private channel")));
 
   const commandGuide = guide.embeds[0].data.fields.map((field) => `${field.name}\n${field.value}`).join("\n");
+  assert.doesNotMatch(commandGuide, /administrators?/iu);
   for (const syntax of [
     "/priv-chat add user:<user>",
     "/priv-chat remove user:<user>",
@@ -304,6 +317,42 @@ test("successful private-chat creation posts welcome and command embeds only in 
     fixture.events.find((event) => event.type === "channel-created").options.name,
     "👤｜9e—𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻—9e°♡",
   );
+});
+
+test("slash and modal creation replies put the dynamic channel mention on its own line", async () => {
+  for (const mode of ["slash", "modal"]) {
+    const fixture = makeCreationFixture();
+    const interaction = {
+      ...fixture.interaction,
+      channelId: "923456789012345678",
+      customId: "private-chat:create-modal",
+      inGuild: () => true,
+      isChatInputCommand: () => mode === "slash",
+      isButton: () => false,
+      isUserSelectMenu: () => false,
+      isModalSubmit: () => mode === "modal",
+      options: {
+        getSubcommand: () => "create",
+        getString: () => "Friends",
+        getUser: () => null,
+      },
+      fields: { getTextInputValue: () => "Friends" },
+      deferReply: async (payload) => fixture.events.push({ type: "deferred", payload }),
+      editReply: async (content) => fixture.events.push({ type: "edit-reply", content }),
+    };
+
+    await handlePrivateChatInteraction(interaction, {
+      client: fixture.client,
+      store: fixture.store,
+      lobbyChannelId: "923456789012345678",
+    });
+
+    assert.equal(
+      fixture.events.at(-1).content,
+      `Private chat created:\n<#${fixture.channel.id}>`,
+      `${mode} creation should use a separate line and the actual channel ID`,
+    );
+  }
 });
 
 test("private-chat creation does not announce when Discord channel creation fails", async () => {

@@ -91,7 +91,7 @@ export function buildPrivateChatCommand() {
     )
     .addSubcommand((subcommand) => subcommand.setName("delete").setDescription("Permanently delete this private chat"))
     .addSubcommand((subcommand) => subcommand.setName("leave").setDescription("Leave a private chat"))
-    .addSubcommand((subcommand) => subcommand.setName("commands").setDescription("Show private-chat commands"))
+    .addSubcommand((subcommand) => subcommand.setName("commands").setDescription("Show private-chat instructions"))
     .toJSON();
 }
 
@@ -275,14 +275,13 @@ export function buildPrivateChatLobbyGuidePayload() {
         toRoyalBold("Name format"),
         "`👤｜9e—your-text—9e°♡`",
         "",
-        "Use the **Commands** button or `/priv-chat commands` for instructions.",
-        "Server administrators with the **Administrator** permission can still access private channels.",
+        "Instructions inside the chat are available from the **Instructions** button or `/priv-chat commands`.",
       ].join("\n"),
     );
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PREFIX}create`).setLabel("Create private chat").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Commands").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Instructions").setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [buttons] };
 }
@@ -308,7 +307,7 @@ export function buildPrivateChatWelcomePayload(ownerId, invitees = []) {
     new ButtonBuilder().setCustomId(`${PREFIX}delete`).setLabel("Delete chat").setStyle(ButtonStyle.Danger),
   );
   const secondRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Commands").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Instructions").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${PREFIX}clear-history`).setLabel("Clear History").setStyle(ButtonStyle.Danger),
   );
   return {
@@ -322,7 +321,7 @@ export function buildPrivateChatCommandsPayload() {
   const embed = new EmbedBuilder()
     .setColor(0xf472b6)
     .setTitle(formatEmbedTitle("Private Chat Commands"))
-    .setDescription(toRoyalBold("Use these commands inside this private channel."))
+    .setDescription("Use these commands inside this private channel")
     .addFields(
       {
         name: toRoyalBold("Create"),
@@ -366,7 +365,7 @@ function helpMessage() {
     "`/priv-chat leave` — remove your own access. The owner cannot leave their chat.",
     "`/priv-chat commands` — show this guide.",
     "",
-    "You can also use the buttons in the private-chat panel. Server administrators with **Administrator** can still access private channels.",
+    "You can also use the buttons in the private-chat panel.",
   ].join("\n");
 }
 
@@ -412,7 +411,7 @@ async function handleSlashCommand(interaction, { client, store, lobbyChannelId }
       if (user) invitees.push(user);
     }
     const channel = await createPrivateChat(interaction, client, store, displayName, invitees);
-    return interaction.editReply(`Private chat created: ${channel}`);
+    return interaction.editReply(`Private chat created:\n<#${channel.id}>`);
   }
 
   const context = getPrivateChatContext(interaction, store);
@@ -584,7 +583,7 @@ async function handleModalSubmit(interaction, { client, store, lobbyChannelId })
       return interaction.editReply(`Create private chats in <#${lobbyChannelId}>.`);
     }
     const channel = await createPrivateChat(interaction, client, store, displayName, []);
-    return interaction.editReply(`Private chat created: ${channel}`);
+    return interaction.editReply(`Private chat created:\n<#${channel.id}>`);
   }
 
   if (interaction.customId === `${PREFIX}rename-modal`) {
