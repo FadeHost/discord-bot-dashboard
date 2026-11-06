@@ -116,6 +116,62 @@ test("duplicate message events produce only one provider call and reply", async 
   assert.deepEqual(incoming.replies[0].allowedMentions, { parse: [], repliedUser: false });
 });
 
+
+test("a direct reply to Sugar triggers a response and passes member context", async () => {
+  let calls = 0;
+  let receivedProfile;
+  const respond = createMessageResponder({
+    generateReply: async (_prompt, _history, profile) => {
+      calls += 1;
+      receivedProfile = profile;
+      return "I’m here!";
+    },
+    getBotUserId: () => BOT_ID,
+  });
+  const incoming = message({ content: "and what do you think?", id: "reply-1" });
+  incoming.reference = {
+    messageId: "sugar-message",
+    message: { author: { id: BOT_ID } },
+  };
+  incoming.member = {
+    displayName: "Kitti",
+    joinedAt: new Date("2025-01-01T00:00:00.000Z"),
+    roles: { cache: [{ name: "Member" }] },
+  };
+  incoming.author = {
+    id: "user-1",
+    bot: false,
+    username: "kitti",
+    globalName: "Kitti",
+    createdAt: new Date("2024-01-01T00:00:00.000Z"),
+  };
+
+  await respond(incoming);
+
+  assert.equal(calls, 1);
+  assert.equal(incoming.replies[0].content, "I’m here!");
+  assert.equal(receivedProfile.username, "kitti");
+  assert.deepEqual(receivedProfile.roles, ["Member"]);
+});
+
+test("a reply to another member does not trigger Sugar", async () => {
+  let calls = 0;
+  const respond = createMessageResponder({
+    generateReply: async () => { calls += 1; return "reply"; },
+    getBotUserId: () => BOT_ID,
+  });
+  const incoming = message({ content: "same here", id: "reply-other" });
+  incoming.reference = {
+    messageId: "other-message",
+    message: { author: { id: "another-user" } },
+  };
+
+  await respond(incoming);
+
+  assert.equal(calls, 0);
+  assert.equal(incoming.replies.length, 0);
+});
+
 test("concurrent provider work is capped", async () => {
   let calls = 0;
   let release;

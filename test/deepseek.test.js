@@ -30,8 +30,9 @@ test("DeepSeek uses the official chat-completions endpoint and parses a mocked r
   assert.equal(body.stream, false);
   assert.equal(body.max_tokens, 300);
   assert.deepEqual(body.thinking, { type: "disabled" });
-  assert.equal(body.messages[1].content, "How are you?");
-  assert.match(body.messages[0].content, /sweet, playful, warm, and helpful/i);
+  assert.equal(body.messages.at(-1).role, "user");
+  assert.equal(body.messages.at(-1).content, "How are you?");
+  assert.match(body.messages[0].content, /socially adaptive Discord AI/i);
 });
 
 test("DeepSeek errors do not expose provider response text or credentials", async () => {
@@ -61,7 +62,12 @@ test("DeepSeek request timeout aborts the request", async () => {
     },
   });
 
-  await assert.rejects(generateReply("Hi"), /timed out/);
+  const keepEventLoopAlive = setTimeout(() => {}, 1_000);
+  try {
+    await assert.rejects(generateReply("Hi"), /timed out/);
+  } finally {
+    clearTimeout(keepEventLoopAlive);
+  }
   assert.equal(signal.aborted, true);
 });
 
@@ -77,6 +83,30 @@ test("DeepSeek rejects oversized or malformed provider responses", async () => {
 
   await assert.rejects(oversized("Hi"), /invalid response/);
   await assert.rejects(malformed("Hi"), /invalid response/);
+});
+
+
+test("DeepSeek includes bounded member context only when profile data exists", async () => {
+  let request;
+  const generateReply = createDeepSeekClient({
+    apiKey: "test-key",
+    fetchImpl: async (_url, options) => {
+      request = options;
+      return okResponse({ choices: [{ message: { content: "Hi!" } }] });
+    },
+  });
+
+  await generateReply("Hello", [], {
+    username: "kitti",
+    displayName: "Kitti",
+    roles: ["Member"],
+    accountCreated: "2024-01-01T00:00:00.000Z",
+    memberSince: "2025-01-01T00:00:00.000Z",
+  });
+
+  const body = JSON.parse(request.body);
+  assert.match(body.messages[1].content, /Current member context/);
+  assert.match(body.messages[1].content, /"username":"kitti"/);
 });
 
 test("DeepSeek requires a non-empty key when a client is created", () => {

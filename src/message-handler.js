@@ -16,15 +16,15 @@ export function createMessageResponder({ generateReply, getBotUserId, memory, no
   return async function respondToMessage(message) {
     if (!message?.guild || !message.author || message.author.bot || message.webhookId) return;
     const botUserId = getBotUserId?.();
-    if (!isAddressedToSugar(message.content, botUserId)) return;
+    const isReplyToSugar = await referencesBotMessage(message, botUserId);
+    if (!isAddressedToSugar(message.content, botUserId) && !isReplyToSugar) return;
     if (!rememberMessage(message.id, seenMessages, now())) return;
-    if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
-      await safeReply(message, BUSY_REPLY);
-      return;
-    }
+    if (activeRequests >= MAX_CONCURRENT_REQUESTS) { await safeReply(message, BUSY_REPLY); return; }
 
     const userMessage = cleanAddressedMessage(message.content, botUserId);
-    const prompt = userMessage || "The user addressed you by name but did not include a question. Reply with a brief, friendly greeting.";
+    const prompt = userMessage || (isReplyToSugar
+      ? "The user replied to your previous message. Continue naturally, using the reply as context."
+      : "The user addressed you by name but did not include a question. Reply with a brief, natural greeting.");
     activeRequests += 1;
     try {
       if (memory && CLEAR_MEMORY.test(prompt.trim())) {
@@ -33,38 +33,49 @@ export function createMessageResponder({ generateReply, getBotUserId, memory, no
         return;
       }
       const history = memory ? memory.getHistory(message.guild.id, message.author.id) : [];
+      const profile = buildMemberContext(message.member, message.author);
       let reply;
-      try {
-        reply = await generateReply(prompt, history);
-      } catch {
+      try { reply = await generateReply(prompt, history, profile); }
+      catch {
         console.error("[ai] DeepSeek request failed; a friendly fallback was sent.");
-        await safeReply(message, FAILURE_REPLY);
-        return;
+        await safeReply(message, FAILURE_REPLY); return;
       }
       const text = [...String(reply ?? "").trim()].slice(0, MAX_REPLY_LENGTH).join("");
       if (text) {
         if (memory) memory.addExchange(message.guild.id, message.author.id, prompt, text);
         await safeReply(message, text);
       }
-    } finally {
-      activeRequests -= 1;
-    }
+    } finally { activeRequests -= 1; }
+  };
+}
+
+async function referencesBotMessage(message, botUserId) {
+  if (!botUserId || !message.reference?.messageId) return false;
+  try {
+    const referenced = message.reference.message ?? await message.channel.messages.fetch(message.reference.messageId);
+    return referenced?.author?.id === botUserId;
+  } catch { return false; }
+}
+
+function buildMemberContext(member, user) {
+  return {
+    username: user?.username ?? "",
+    displayName: member?.displayName ?? user?.globalName ?? user?.username ?? "",
+    roles: member?.roles?.cache
+      ? member.roles.cache.filter((role) => role.name !== "@everyone").map((role) => role.name).slice(0, 20) : [],
+    accountCreated: user?.createdAt?.toISOString?.() ?? "",
+    memberSince: member?.joinedAt?.toISOString?.() ?? "",
   };
 }
 
 async function safeReply(message, content) {
-  try {
-    await message.reply({ content, allowedMentions: { parse: [], repliedUser: false } });
-  } catch {
-    console.error("[ai] Could not send the Discord reply.");
-  }
+  try { await message.reply({ content, allowedMentions: { parse: [], repliedUser: false } }); }
+  catch { console.error("[ai] Could not send the Discord reply."); }
 }
 
 function rememberMessage(id, seenMessages, timestamp) {
   if (!id) return true;
-  for (const [messageId, seenAt] of seenMessages) {
-    if (timestamp - seenAt >= DEDUPE_TTL_MS) seenMessages.delete(messageId);
-  }
+  for (const [messageId, seenAt] of seenMessages) if (timestamp - seenAt >= DEDUPE_TTL_MS) seenMessages.delete(messageId);
   if (seenMessages.has(id)) return false;
   seenMessages.set(id, timestamp);
   while (seenMessages.size > MAX_SEEN_MESSAGES) seenMessages.delete(seenMessages.keys().next().value);
