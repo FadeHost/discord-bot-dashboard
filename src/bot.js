@@ -19,7 +19,7 @@ const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf871
  * @param {(message: string) => Promise<string>} [options.generateReply]
  * @returns {Client}
  */
-export function createBot({ token, settings, generateReply }) {
+export function createBot({ token, settings, generateReply, memory }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -43,6 +43,7 @@ export function createBot({ token, settings, generateReply }) {
       Events.MessageCreate,
       createMessageResponder({
         generateReply,
+        memory,
         getBotUserId: () => client.user?.id,
       }),
     );
