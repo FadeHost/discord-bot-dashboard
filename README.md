@@ -51,6 +51,25 @@ anybody back to an address you have not listed.
 Without `APP_URL` the bot still runs; the dashboard just says it has nowhere
 for Discord to send people back to.
 
+## Private chats
+
+The bot registers `/priv-chat` for the server containing channel
+`1568179043356901376`. In that channel, use **Create private chat** or
+`/priv-chat create name:<name>`; creation can include up to five invitees.
+New channels use the existing category whose name resolves to **General**,
+including decorative Unicode lettering.
+
+The channel owner can add or remove invitees and rename the chat. Invitees can
+leave. Deletion requires an owner confirmation and permanently removes the
+channel and its messages. Each channel is private to its owner and invitees
+through Discord permission overwrites; server administrators with the
+**Administrator** permission can still access it. Chat ownership and invitees
+are stored in `private-chats.json` under the persistent `DATA_DIR`.
+
+The bot needs permission to create and manage channels in the target server.
+On startup it posts and pins one guide in the lobby, and keeps unrelated
+application slash commands when registering `/priv-chat`.
+
 ### Keeping secrets out of the project
 
 The app reads variables from its process environment; it does not load `.env`
@@ -99,6 +118,8 @@ clicks to fix and means there is nothing on disk worth stealing.
 
 ```
 /data/settings.json   one entry per server: the two channels and the message
+/data/memory.json     bounded per-guild, per-user conversation history
+/data/private-chats.json   private-chat owners, invitees, and lobby guide IDs
 ```
 
 Production startup requires this file to exist; it will not initialize empty
@@ -108,13 +129,13 @@ directory before starting. Do not do this when restoring an existing install.
 
 ## Backup and recovery
 
-The app currently has no database. Its durable application data is the
-`settings.json` file in `DATA_DIR`. Point `DATA_DIR` at a persistent disk or
-mounted directory on the host. Outside `NODE_ENV=development`, the app only
-uses an existing `DATA_DIR` or `/data` and stops if that storage is unavailable;
-it never switches to `./data`. Local development may fall back to `./data`.
-A writable path is not necessarily persistent, so confirm the chosen disk
-survives host restarts and redeploys.
+The app currently has no database. Its durable application data is
+`settings.json`, `memory.json`, and `private-chats.json` under `DATA_DIR`.
+Point `DATA_DIR` at a persistent disk or mounted directory on the host. Outside
+`NODE_ENV=development`, the app only uses an existing `DATA_DIR` or `/data` and
+stops if that storage is unavailable; it never switches to `./data`. Local
+development may fall back to `./data`. A writable path is not necessarily
+persistent, so confirm the chosen disk survives host restarts and redeploys.
 
 GitHub `main` stores the source history. To make a portable snapshot of the
 project files and current data, run this from the project directory:
@@ -137,10 +158,15 @@ Files tab and can be downloaded:
 bash scripts/backup.sh /data/sugar-backups
 ```
 
-The backup includes the project files needed to run the app and
-`DATA_DIR/settings.json` when present. It excludes Git internals, installed
-packages, temporary caches, environment files, and common credential files.
-Store the downloaded archive somewhere separate from the host that runs the bot.
+The backup includes the project files needed to run the app and each of
+`DATA_DIR/settings.json`, `DATA_DIR/memory.json`, and
+`DATA_DIR/private-chats.json` when present. Missing data files are not created
+or added as empty files. The restore script extracts every archived file,
+including these data files, into a new directory; it does not write to `DATA_DIR`
+or modify the live installation. It refuses to extract into an existing
+directory. It excludes Git internals, installed packages, temporary caches,
+environment files, and common credential files. Store the downloaded archive
+somewhere separate from the host that runs the bot.
 
 To inspect and recover a snapshot, extract it into a new, empty directory:
 
@@ -150,7 +176,10 @@ bash scripts/restore.sh /path/to/sugar-ai-YYYYMMDDTHHMMSSZ.tar.gz
 
 An optional second argument selects the restore directory. The script refuses
 to overwrite an existing directory or extract into the live project. Review
-`BACKUP-INFO.txt` and the restored `data/` before using them. For a new host,
+`BACKUP-INFO.txt` and the restored `data/` before using them. To recover data
+for an existing installation, first make and verify a separate backup, then
+review and copy only the needed files; never extract over an existing data
+directory. For a new host,
 check out the GitHub `main` branch, install with `npm ci`, set the required
 secrets in that host's secret manager, and point `DATA_DIR` at a persistent
 directory. Restore data only into an empty data directory; preserve any

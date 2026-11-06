@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function createFixture(t, { includeSettings = true } = {}) {
+function createFixture(
+  t,
+  { includeSettings = true, includeMemory = true, includePrivateChats = true } = {},
+) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "sugar-backup-test-"));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
 
@@ -51,6 +54,8 @@ function createFixture(t, { includeSettings = true } = {}) {
   );
 
   const settingsFile = path.join(dataDir, "settings.json");
+  const memoryFile = path.join(dataDir, "memory.json");
+  const privateChatsFile = path.join(dataDir, "private-chats.json");
   if (includeSettings) {
     fs.writeFileSync(
       settingsFile,
@@ -63,8 +68,39 @@ function createFixture(t, { includeSettings = true } = {}) {
       }),
     );
   }
+  if (includeMemory) {
+    fs.writeFileSync(
+      memoryFile,
+      JSON.stringify({
+        "941800000000000001:941800000000000005": [
+          { role: "user", content: "hello", timestamp: 1793950711000 },
+          { role: "assistant", content: "hi there", timestamp: 1793950712000 },
+        ],
+      }),
+    );
+  }
+  if (includePrivateChats) {
+    fs.writeFileSync(
+      privateChatsFile,
+      JSON.stringify({
+        version: 1,
+        chats: {
+          "941800000000000003": {
+            guildId: "941800000000000001",
+            ownerId: "941800000000000005",
+            memberIds: ["941800000000000006"],
+            displayName: "Backup test chat",
+            createdAt: "2026-11-06T07:38:31.000Z",
+          },
+        },
+        lobbyGuideMessageIds: {
+          "941800000000000004": "941800000000000007",
+        },
+      }),
+    );
+  }
 
-  return { base, root, dataDir, settingsFile };
+  return { base, root, dataDir, settingsFile, memoryFile, privateChatsFile };
 }
 
 function runScript(fixture, script, args) {
@@ -89,7 +125,7 @@ function listArchive(archive) {
     .filter(Boolean);
 }
 
-test("FadeHost-style backup includes settings and code, excludes credentials and staging files", (t) => {
+test("FadeHost-style backup and restore preserve app data and code without including credentials", (t) => {
   const fixture = createFixture(t);
   const outputDir = path.join(fixture.dataDir, "sugar-backups");
   const result = runScript(fixture, "backup.sh", [outputDir]);
@@ -103,6 +139,8 @@ test("FadeHost-style backup includes settings and code, excludes credentials and
   assert.ok(entries.includes("./index.js"));
   assert.ok(entries.includes("./package.json"));
   assert.ok(entries.includes("./data/settings.json"));
+  assert.ok(entries.includes("./data/memory.json"));
+  assert.ok(entries.includes("./data/private-chats.json"));
   assert.ok(entries.includes("./.env.example"));
   assert.ok(
     !entries.some(
@@ -123,6 +161,14 @@ test("FadeHost-style backup includes settings and code, excludes credentials and
     fs.readFileSync(path.join(restoreDir, "data", "settings.json"), "utf8"),
     fs.readFileSync(fixture.settingsFile, "utf8"),
   );
+  assert.equal(
+    fs.readFileSync(path.join(restoreDir, "data", "memory.json"), "utf8"),
+    fs.readFileSync(fixture.memoryFile, "utf8"),
+  );
+  assert.equal(
+    fs.readFileSync(path.join(restoreDir, "data", "private-chats.json"), "utf8"),
+    fs.readFileSync(fixture.privateChatsFile, "utf8"),
+  );
   assert.equal(fs.readFileSync(path.join(restoreDir, "index.js"), "utf8"), "export const fixture = true;\n");
   assert.equal(fs.existsSync(path.join(restoreDir, ".env")), false);
   assert.equal(fs.existsSync(path.join(restoreDir, "config", "credentials.json")), false);
@@ -133,15 +179,22 @@ test("FadeHost-style backup includes settings and code, excludes credentials and
   assert.equal(fs.readFileSync(path.join(restoreDir, "keep.txt"), "utf8"), "preserve");
 });
 
-test("backup does not fabricate settings.json when it is absent", (t) => {
-  const fixture = createFixture(t, { includeSettings: false });
+test("backup does not fabricate app data files that are absent", (t) => {
+  const fixture = createFixture(t, {
+    includeSettings: false,
+    includeMemory: false,
+    includePrivateChats: false,
+  });
   const outputDir = path.join(fixture.base, "external-backups");
   const result = runScript(fixture, "backup.sh", [outputDir]);
 
   assert.equal(result.status, 0, result.stderr);
   const archive = result.stdout.match(/Backup created: (.+)/)?.[1];
   assert.ok(archive, result.stdout);
-  assert.ok(!listArchive(archive).includes("./data/settings.json"));
+  const entries = listArchive(archive);
+  assert.ok(!entries.includes("./data/settings.json"));
+  assert.ok(!entries.includes("./data/memory.json"));
+  assert.ok(!entries.includes("./data/private-chats.json"));
 });
 
 test("restore rejects archives containing symlinks before extraction", (t) => {

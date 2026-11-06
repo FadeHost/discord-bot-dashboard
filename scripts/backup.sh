@@ -108,11 +108,11 @@ trap cleanup EXIT
     done
 )
 
-# This app's durable data is settings.json. Copying only this file avoids
-# collecting credentials from DATA_DIR and avoids recursively archiving an
-# output directory placed under /data for FadeHost's file manager.
+# Copy only the app's known durable data files. This avoids collecting
+# credentials from DATA_DIR and avoids recursively archiving an output
+# directory placed under /data for FadeHost's file manager.
 mkdir -p -- "$STAGE/data"
-for DATA_FILE in settings.json memory.json; do
+for DATA_FILE in settings.json memory.json private-chats.json; do
   SOURCE="$DATA_DIR/$DATA_FILE"
   if [[ -L "$SOURCE" ]]; then
     echo "$DATA_FILE is a symlink; refusing to back it up." >&2
