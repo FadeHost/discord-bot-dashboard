@@ -112,17 +112,19 @@ trap cleanup EXIT
 # collecting credentials from DATA_DIR and avoids recursively archiving an
 # output directory placed under /data for FadeHost's file manager.
 mkdir -p -- "$STAGE/data"
-SETTINGS_FILE="$DATA_DIR/settings.json"
-if [[ -L "$SETTINGS_FILE" ]]; then
-  echo "settings.json is a symlink; refusing to back it up." >&2
-  exit 1
-elif [[ -e "$SETTINGS_FILE" ]]; then
-  if [[ ! -f "$SETTINGS_FILE" || ! -r "$SETTINGS_FILE" ]]; then
-    echo "settings.json is not a readable regular file; no backup was created." >&2
+for DATA_FILE in settings.json memory.json; do
+  SOURCE="$DATA_DIR/$DATA_FILE"
+  if [[ -L "$SOURCE" ]]; then
+    echo "$DATA_FILE is a symlink; refusing to back it up." >&2
     exit 1
+  elif [[ -e "$SOURCE" ]]; then
+    if [[ ! -f "$SOURCE" || ! -r "$SOURCE" ]]; then
+      echo "$DATA_FILE is not a readable regular file; no backup was created." >&2
+      exit 1
+    fi
+    cp -p -- "$SOURCE" "$STAGE/data/$DATA_FILE"
   fi
-  cp -p -- "$SETTINGS_FILE" "$STAGE/data/settings.json"
-fi
+done
 
 REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 {
