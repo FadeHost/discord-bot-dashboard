@@ -56,8 +56,12 @@ export function createDeepSeekClient({ apiKey, model = DEFAULT_MODEL, fetchImpl 
           headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: selectedModel,
-            messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "system", content: context },
-              ...safeHistory, { role: "user", content: String(userMessage ?? "").slice(0, 1_200) }],
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              ...(context ? [{ role: "system", content: context }] : []),
+              ...safeHistory,
+              { role: "user", content: String(userMessage ?? "").slice(0, 1_200) },
+            ],
             max_tokens: 300, temperature: 0.9, thinking: { type: "disabled" }, stream: false,
           }),
           signal: controller.signal,
