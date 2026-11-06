@@ -6,6 +6,7 @@
 import { createBot } from "./src/bot.js";
 import { createDeepSeekClient } from "./src/deepseek.js";
 import { SettingsStore, resolveDataDir } from "./src/settings.js";
+import { MemoryStore } from "./src/memory.js";
 import { createWeb } from "./src/web.js";
 
 const PORT = Number(process.env.PORT || 8080);
@@ -39,9 +40,11 @@ if (SESSION_SECRET.length < 16) {
 
 let dataDir;
 let settings;
+let memory;
 try {
   dataDir = resolveDataDir();
   settings = new SettingsStore(dataDir, { allowMissing: process.env.NODE_ENV === "development" });
+  memory = new MemoryStore(dataDir);
 } catch (error) {
   fatal(error instanceof Error ? error.message : "Storage initialization failed.", "storage");
 }
@@ -52,7 +55,7 @@ if (!generateReply) {
   console.warn("[ai] DEEPSEEK_API_KEY is not set; AI replies are disabled.");
 }
 
-const client = createBot({ token: DISCORD_TOKEN, settings, generateReply });
+const client = createBot({ token: DISCORD_TOKEN, settings, generateReply, memory });
 
 const { app, redirectUri } = createWeb({
   client,
