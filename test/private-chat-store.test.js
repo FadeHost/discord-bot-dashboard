@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ChannelType, PermissionFlagsBits } from "discord.js";
 
 import {
   MAX_PRIVATE_CHAT_MEMBERS,
@@ -16,9 +17,10 @@ import {
 } from "../src/private-chat-format.js";
 import {
   buildPrivateChatCommand,
+  buildPrivateChatLobbyGuidePayload,
   buildPrivateChatPermissionOverwrites,
+  createPrivateChat,
 } from "../src/private-chat-system.js";
-import { PermissionFlagsBits } from "discord.js";
 
 function makeDirectory(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sugar-private-chats-"));
@@ -96,9 +98,170 @@ test("private-chat store rejects corrupt data without replacing it", (t) => {
 
 test("private-chat names use Discord-safe formatting and match decorative General categories", () => {
   assert.equal(normalizePrivateChatLabel("Brian Moser"), "brian-moser");
-  assert.equal(formatPrivateChatChannelName("Brian Moser"), "🧍｜9e—brian-moser—9e°♡");
+  assert.equal(formatPrivateChatChannelName("Brian Moser"), "👤｜9e—𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻—9e°♡");
   assert.equal(normalizeCategoryName("୨୧ ─────── 𝓖𝓮𝓷𝓮𝓻𝓪𝓵 ─────── ୨୧"), "general");
   assert.throws(() => normalizePrivateChatLabel("🎀"), /letter or number/);
+});
+
+test("the lobby creation guide keeps its buttons and uses the 👤 name example", () => {
+  const payload = buildPrivateChatLobbyGuidePayload();
+  const description = payload.embeds[0].data.description;
+
+  assert.equal(payload.embeds[0].data.title, "Create Private Chat 🎀");
+  assert.match(description, /👤｜9e—your-text—9e°♡/);
+  assert.doesNotMatch(description, /\u{1F9CD}|\u2642\uFE0F/u);
+  assert.deepEqual(
+    payload.components[0].components.map((button) => button.data.custom_id),
+    ["private-chat:create", "private-chat:commands"],
+  );
+});
+
+function makeCreationFixture({ failChannelCreation = false, failStore = false, failAnnouncement = false } = {}) {
+  const events = [];
+  const channel = {
+    id: "523456789012345678",
+    send: async () => events.push({ type: "channel-panel" }),
+    delete: async () => events.push({ type: "channel-deleted" }),
+  };
+  const lobby = {
+    send: async (payload) => {
+      events.push({ type: "lobby-announcement", payload });
+      if (failAnnouncement) throw new Error("lobby send failed");
+    },
+  };
+  const category = {
+    id: "623456789012345678",
+    name: "General",
+    type: ChannelType.GuildCategory,
+  };
+  const guild = {
+    id: "223456789012345678",
+    roles: { everyone: { id: "123456789012345678" } },
+    members: { fetch: async () => null },
+    channels: {
+      cache: new Map([[category.id, category]]),
+      create: async (options) => {
+        events.push({ type: "channel-created", options });
+        if (failChannelCreation) throw new Error("channel create failed");
+        return channel;
+      },
+    },
+  };
+  const client = {
+    user: { id: "423456789012345678" },
+    channels: {
+      fetch: async (channelId) => {
+        events.push({ type: "lobby-fetched", channelId });
+        return lobby;
+      },
+    },
+  };
+  const store = {
+    create: () => {
+      events.push({ type: "metadata-saved" });
+      if (failStore) throw new Error("store write failed");
+    },
+  };
+
+  return {
+    events,
+    channel,
+    client,
+    guild,
+    store,
+    interaction: { user: { id: "323456789012345678" }, guild },
+  };
+}
+
+test("successful private-chat creation announces the actual channel in the lobby", async () => {
+  const fixture = makeCreationFixture();
+
+  const channel = await createPrivateChat(
+    fixture.interaction,
+    fixture.client,
+    fixture.store,
+    "Brian Moser",
+    [],
+    PRIVATE_CHAT_LOBBY_CHANNEL_ID,
+  );
+
+  assert.equal(channel.id, fixture.channel.id);
+  assert.deepEqual(
+    fixture.events.map((event) => event.type),
+    ["channel-created", "metadata-saved", "channel-panel", "lobby-fetched", "lobby-announcement"],
+  );
+  const announcement = fixture.events.at(-1);
+  assert.deepEqual(announcement.payload, {
+    content: `A new private chat has been created! 🎀\n<#${channel.id}>\nYour private space is ready ♡`,
+    allowedMentions: { parse: [] },
+  });
+  assert.equal(fixture.events.find((event) => event.type === "lobby-fetched").channelId, PRIVATE_CHAT_LOBBY_CHANNEL_ID);
+  assert.equal(
+    fixture.events.find((event) => event.type === "channel-created").options.name,
+    "👤｜9e—𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻—9e°♡",
+  );
+});
+
+test("private-chat creation does not announce when Discord channel creation fails", async () => {
+  const fixture = makeCreationFixture({ failChannelCreation: true });
+
+  await assert.rejects(
+    createPrivateChat(
+      fixture.interaction,
+      fixture.client,
+      fixture.store,
+      "Brian Moser",
+      [],
+      PRIVATE_CHAT_LOBBY_CHANNEL_ID,
+    ),
+    /channel create failed/,
+  );
+  assert.deepEqual(fixture.events.map((event) => event.type), ["channel-created"]);
+});
+
+test("private-chat creation does not announce when metadata cannot be saved", async () => {
+  const fixture = makeCreationFixture({ failStore: true });
+
+  await assert.rejects(
+    createPrivateChat(
+      fixture.interaction,
+      fixture.client,
+      fixture.store,
+      "Brian Moser",
+      [],
+      PRIVATE_CHAT_LOBBY_CHANNEL_ID,
+    ),
+    /owner data could not be saved/,
+  );
+  assert.deepEqual(
+    fixture.events.map((event) => event.type),
+    ["channel-created", "metadata-saved", "channel-deleted"],
+  );
+});
+
+test("a failed lobby announcement does not undo an already-created private chat", async () => {
+  const fixture = makeCreationFixture({ failAnnouncement: true });
+  const errors = [];
+  const originalConsoleError = console.error;
+  console.error = (...values) => errors.push(values.join(" "));
+
+  try {
+    const channel = await createPrivateChat(
+      fixture.interaction,
+      fixture.client,
+      fixture.store,
+      "Brian Moser",
+      [],
+      PRIVATE_CHAT_LOBBY_CHANNEL_ID,
+    );
+    assert.equal(channel.id, fixture.channel.id);
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.ok(fixture.events.some((event) => event.type === "lobby-announcement"));
+  assert.match(errors[0], /could not be posted/);
+  assert.ok(!fixture.events.some((event) => event.type === "channel-deleted"));
 });
 
 test("private-chat command exposes create, add, remove, rename, delete, leave, and help", () => {
