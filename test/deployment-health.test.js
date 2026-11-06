@@ -80,6 +80,38 @@ test("deployment verification retries unhealthy HTTP responses without logging b
   assert.equal(diagnostics[0].lastResult, "HTTP 503");
 });
 
+test("deployment failure reports the most recent retry result", async () => {
+  let calls = 0;
+  const diagnostics = [];
+  await assert.rejects(
+    verifyDeploymentHealth({
+      healthUrl: HEALTH_URL,
+      expectedSha: EXPECTED_SHA,
+      attempts: 2,
+      intervalMs: 0,
+      sleep: async () => {},
+      onRetry: (info) => diagnostics.push(info),
+      fetchImpl: async () => {
+        calls += 1;
+        return calls === 1
+          ? new Response("starting", { status: 503 })
+          : new Response("{invalid json", { status: 200 });
+      },
+    }),
+    (error) => {
+      assert.match(error.message, /HTTP 200 with invalid or oversized JSON/);
+      assert.doesNotMatch(error.message, /HTTP 503/);
+      return true;
+    },
+  );
+
+  assert.equal(calls, 2);
+  assert.deepEqual(
+    diagnostics.map(({ lastResult }) => lastResult),
+    ["HTTP 503", "HTTP 200 with invalid or oversized JSON"],
+  );
+});
+
 test("deployment verification requires ok=true and an exact commit match", async () => {
   await assert.rejects(
     verifyDeploymentHealth({

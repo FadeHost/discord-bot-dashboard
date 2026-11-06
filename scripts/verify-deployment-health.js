@@ -49,6 +49,7 @@ export async function verifyDeploymentHealth({
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let attemptResult = "request failed";
 
     try {
       const response = await fetchImpl(endpoint, {
@@ -57,36 +58,41 @@ export async function verifyDeploymentHealth({
       });
 
       if (response.status !== 200) {
-        lastResult = `HTTP ${response.status}`;
+        attemptResult = `HTTP ${response.status}`;
         await cancelBody(response);
       } else {
         let payload;
+        let invalidJson = false;
         try {
           payload = await readLimitedJson(response);
         } catch {
-          lastResult = "HTTP 200 with invalid or oversized JSON";
+          attemptResult = "HTTP 200 with invalid or oversized JSON";
+          invalidJson = true;
         }
 
-        if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-          if (payload.ok !== true) {
-            lastResult = "HTTP 200 with ok=false";
-          } else {
-            const observedVersion = normalizeSha(payload.version) ?? "unknown";
-            if (observedVersion === expectedVersion) {
-              return { attempts: attempt, version: expectedVersion };
+        if (!invalidJson) {
+          if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+            if (payload.ok !== true) {
+              attemptResult = "HTTP 200 with ok=false";
+            } else {
+              const observedVersion = normalizeSha(payload.version) ?? "unknown";
+              if (observedVersion === expectedVersion) {
+                return { attempts: attempt, version: expectedVersion };
+              }
+              attemptResult = `HTTP 200, healthy but serving ${observedVersion}`;
             }
-            lastResult = `HTTP 200, healthy but serving ${observedVersion}`;
+          } else {
+            attemptResult = "HTTP 200 with invalid JSON shape";
           }
-        } else if (lastResult === "no response") {
-          lastResult = "HTTP 200 with invalid JSON shape";
         }
       }
     } catch {
-      lastResult = controller.signal.aborted ? "request timed out" : "request failed";
+      attemptResult = controller.signal.aborted ? "request timed out" : "request failed";
     } finally {
       clearTimeout(timer);
     }
 
+    lastResult = attemptResult;
     onRetry({ attempt, maxAttempts: attempts, lastResult });
     if (attempt < attempts) await sleep(intervalMs);
   }
