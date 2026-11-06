@@ -24,6 +24,14 @@ if tar -tzf "$ARCHIVE" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   exit 1
 fi
 
+if tar -tvzf "$ARCHIVE" | awk '
+  substr($0, 1, 1) != "-" && substr($0, 1, 1) != "d" { unsafe = 1; exit }
+  END { exit unsafe ? 0 : 1 }
+'; then
+  echo "The archive contains a link or special file; nothing was extracted." >&2
+  exit 1
+fi
+
 if [[ $# -eq 2 ]]; then
   DEST="$2"
 else

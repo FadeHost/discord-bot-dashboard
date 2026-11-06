@@ -4,7 +4,6 @@ umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 OUTPUT_DIR="${1:-$HOME/sugar-backups}"
-
 OUTPUT_DIR="$(realpath -m -- "$OUTPUT_DIR")"
 
 case "$OUTPUT_DIR/" in
@@ -32,13 +31,35 @@ case "$DATA_DIR" in
   /*) ;;
   *) DATA_DIR="$ROOT/$DATA_DIR" ;;
 esac
-if [[ ! -d "$DATA_DIR" || ! -r "$DATA_DIR" ]]; then
+if [[ ! -d "$DATA_DIR" || ! -r "$DATA_DIR" || ! -x "$DATA_DIR" ]]; then
   echo "The selected data directory is not readable; no backup was created." >&2
   exit 1
 fi
+DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
 
-STAGE="$(mktemp -d "$OUTPUT_DIR/.sugar-ai-backup.XXXXXX")"
-TEMP_ARCHIVE="$OUTPUT_DIR/.sugar-ai-backup.$$.tar.gz"
+is_inside() {
+  local path="$1"
+  local parent="$2"
+  [[ "$path" == "$parent" || "$path" == "$parent/"* ]]
+}
+
+STAGE=""
+for candidate in "${TMPDIR:-/tmp}" /tmp /var/tmp; do
+  [[ -d "$candidate" && -w "$candidate" ]] || continue
+  candidate="$(realpath -e -- "$candidate")"
+  if is_inside "$candidate" "$ROOT"; then
+    continue
+  fi
+  if STAGE="$(mktemp -d "$candidate/.sugar-ai-backup.XXXXXX" 2>/dev/null)"; then
+    break
+  fi
+done
+if [[ -z "$STAGE" ]]; then
+  echo "No safe temporary directory is available; no backup was created." >&2
+  exit 1
+fi
+
+TEMP_ARCHIVE="$(mktemp "$OUTPUT_DIR/.sugar-ai-backup.XXXXXX")"
 cleanup() {
   rm -rf -- "$STAGE"
   rm -f -- "$TEMP_ARCHIVE"
@@ -47,25 +68,61 @@ trap cleanup EXIT
 
 (
   cd "$ROOT"
-  find . \( -type f -o -type l \) \
-    ! -path './.git/*' \
-    ! -path './node_modules/*' \
-    ! -path './.cache/*' \
-    ! -path './.local/*' \
-    ! -path './.conversation/*' \
-    ! -path './data/*' \
-    ! -path './backups/*' \
-    ! -name '.env' \
-    ! -name '.envrc' \
-    ! \( -name '.env.*' ! -name '.env.example' \) \
-    -print0 |
+  find . \
+    \( -type d \( \
+      -name .git -o -name node_modules -o -name .cache -o -name .local -o \
+      -name .conversation -o -name data -o -name backups -o -name .ssh -o \
+      -name .aws -o -iname credential -o -iname credentials -o \
+      -iname secret -o -iname secrets \
+    \) -prune \) -o \
+    \( -type f \
+      ! -name '.env' \
+      ! -name '.envrc' \
+      ! -name '.npmrc' \
+      ! -name '.netrc' \
+      ! -name '.pypirc' \
+      ! -name '*.env' \
+      ! \( -name '.env.*' ! -name '.env.example' \) \
+      ! -iname '*credential*' \
+      ! -iname '*secret*' \
+      ! -iname '*password*' \
+      ! -iname '*api-key*' \
+      ! -iname '*api_key*' \
+      ! -iname '*access-token*' \
+      ! -iname '*access_token*' \
+      ! -iname '*service-account*' \
+      ! -iname '*service_account*' \
+      ! -iname '*private-key*' \
+      ! -iname '*private_key*' \
+      ! -iname '*.pem' \
+      ! -iname '*.key' \
+      ! -iname '*.p12' \
+      ! -iname '*.pfx' \
+      ! -iname '*.keystore' \
+      ! -iname '*.jks' \
+      ! -name 'id_rsa*' \
+      ! -name 'id_ed25519*' \
+      -print0 \) |
     while IFS= read -r -d '' file; do
       cp -pP --parents -- "$file" "$STAGE"
     done
 )
 
+# This app's durable data is settings.json. Copying only this file avoids
+# collecting credentials from DATA_DIR and avoids recursively archiving an
+# output directory placed under /data for FadeHost's file manager.
 mkdir -p -- "$STAGE/data"
-cp -a -- "$DATA_DIR/." "$STAGE/data/"
+SETTINGS_FILE="$DATA_DIR/settings.json"
+if [[ -L "$SETTINGS_FILE" ]]; then
+  echo "settings.json is a symlink; refusing to back it up." >&2
+  exit 1
+elif [[ -e "$SETTINGS_FILE" ]]; then
+  if [[ ! -f "$SETTINGS_FILE" || ! -r "$SETTINGS_FILE" ]]; then
+    echo "settings.json is not a readable regular file; no backup was created." >&2
+    exit 1
+  fi
+  cp -p -- "$SETTINGS_FILE" "$STAGE/data/settings.json"
+fi
 
 REVISION="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 {

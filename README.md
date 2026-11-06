@@ -130,10 +130,17 @@ location outside the project, pass it as the first argument:
 bash scripts/backup.sh /path/to/private-backups
 ```
 
-The backup includes source, configuration templates, project documents, and
-the selected data directory. It excludes Git internals, installed packages,
-temporary caches, and secret-bearing environment files. Store the archive
-somewhere separate from the host that runs the bot.
+For FadeHost, use a directory under `/data` so the archive appears in the app's
+Files tab and can be downloaded:
+
+```bash
+bash scripts/backup.sh /data/sugar-backups
+```
+
+The backup includes the project files needed to run the app and
+`DATA_DIR/settings.json` when present. It excludes Git internals, installed
+packages, temporary caches, environment files, and common credential files.
+Store the downloaded archive somewhere separate from the host that runs the bot.
 
 To inspect and recover a snapshot, extract it into a new, empty directory:
 
