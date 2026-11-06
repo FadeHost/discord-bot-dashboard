@@ -2,7 +2,7 @@ const GREETING_PREFIX =
   /^(?:(?:hey|hi|hello|yo|okay|ok|excuse me|good morning|good afternoon|good evening)\b[\s,:!?-]*)+/i;
 const NON_NAME_FOLLOWER = /^(?:daddy|mommy|momma|baby|rush|cookie|cookies|cake|candy|water|coffee|tea|soda|drink|food)\b/i;
 const DIRECT_REQUEST =
-  /^(?:can|could|would|will|do|did|are)\s+you\b|^(?:can|could|would)\s+i\s+ask\b|^(?:is that you|please\b|help\b|tell\b|explain\b|summari[sz]e\b|translate\b|what\b|why\b|how\b|when\b|where\b|who\b|quick question\b|i have a question\b|i need (?:some )?(?:help|advice|a hand|you|to ask)\b|i was wondering\b|i wanted to ask\b|we need to talk\b|thanks\b|thank you\b|let['’]s talk\b)/i;
+  /^(?:can|could|would|will|do|did|are)\s+you\b|^(?:can|could|would)\s+i\s+ask\b|^(?:is that you|please\b|help\b|tell\b|explain\b|summari[sz]e\b|translate\b|what\b|why\b|how\b|when\b|where\b|who\b|quick question\b|i have a question\b|i need (?:some )?(?:help|advice|a hand|you|to ask)\b|i was wondering\b|i wanted to ask\b|we need to talk\b|thanks\b|thank you\b|forget\b|clear\b|let['’]s talk\b)/i;
 const TRAILING_ADDRESS =
   /^(?:what|why|how|when|where|who|can|could|would|will|do|did|are|please|help|tell|explain|thanks|thank you|quick question|i have a question)\b/i;
 const GREETING_ONLY = /^(?:hey|hi|hello|yo|good morning|good afternoon|good evening)[.!?]*$/i;
