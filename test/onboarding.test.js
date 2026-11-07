@@ -4,12 +4,14 @@ import { ChannelType, Collection } from "discord.js";
 
 import {
   buildOnboardingWelcomePayload,
+  buildOnboardingGuidePayload,
   completeOnboardingVerification,
   createOnboardingService,
   ensureOnboardingChannels,
   handleOnboardingReaction,
   ONBOARDING_CHANNEL_ID,
   ONBOARDING_FOOTER,
+  ONBOARDING_GUIDE_FOOTER,
   PINK_CHECK_EMOJI,
   PINK_CHECK_EMOJI_ID,
 } from "../src/onboarding.js";
@@ -175,6 +177,29 @@ test("welcome embed uses the private-chat style and mentions each onboarding cha
   assert.equal(embed.footer.text, ONBOARDING_FOOTER);
 });
 
+test("the start guide explains onboarding and uses the matching pink embed style", () => {
+  const channels = new Map(["rules", "help", "start", "guide", "news"].map((name, index) => [
+    name,
+    { id: String(800 + index) },
+  ]));
+
+  const payload = buildOnboardingGuidePayload({ channels });
+  const embed = payload.embeds[0].toJSON();
+  const content = `${embed.description}\n${embed.fields.map(({ name, value }) => `${name}\n${value}`).join("\n")}`;
+
+  assert.equal(embed.color, 0xf472b6);
+  assert.match(embed.title, /🎀$/u);
+  assert.match(content, /<#800>/);
+  assert.match(content, new RegExp(`<#${ONBOARDING_CHANNEL_ID}>`));
+  assert.match(content, new RegExp(PINK_CHECK_EMOJI));
+  assert.match(content, /remove your `new` role and add the `member` role/);
+  assert.match(content, /<#801>.*no ticket system/s);
+  assert.match(content, /<#803>.*how the server works/s);
+  assert.match(content, /<#804>.*announcements and updates/s);
+  assert.equal(embed.footer.text, ONBOARDING_GUIDE_FOOTER);
+  assert.deepEqual(payload.allowedMentions, { parse: [] });
+});
+
 test("verification adds member before removing new", async () => {
   const { guild, calls, member } = makeGuild({ roles: onboardingRoles() });
   guild.members.fetch = async () => member;
@@ -262,6 +287,130 @@ test("the onboarding service provisions the target guild and reacts to each new 
   assert.equal(createdChannels.length, 5);
   assert.equal(posted[0].payload.embeds[0].data.color, 0xf472b6);
   assert.deepEqual(posted[1], { emojiId: PINK_CHECK_EMOJI_ID, emojiName: "pinkcheck" });
+});
+
+test("startup creates one start guide and reuses it on later setup runs", async () => {
+  const startChannel = {
+    id: "941800000000000420",
+    name: "start",
+    type: ChannelType.GuildText,
+    guildId: GUILD_ID,
+    isTextBased: () => true,
+  };
+  const { guild } = makeGuild({ channels: [startChannel] });
+  startChannel.guild = guild;
+
+  const history = new Collection();
+  const edits = [];
+  const guideStore = {
+    messageId: null,
+    getMessageId() {
+      return this.messageId;
+    },
+    setMessageId(channelId, messageId) {
+      assert.equal(channelId, startChannel.id);
+      this.messageId = messageId;
+    },
+  };
+  let sends = 0;
+
+  startChannel.messages = {
+    fetch: async (query) => {
+      if (typeof query === "string") {
+        const message = history.get(query);
+        if (!message) throw Object.assign(new Error("unknown message"), { code: 10008 });
+        return message;
+      }
+      return history;
+    },
+  };
+  startChannel.send = async (payload) => {
+    sends += 1;
+    const message = {
+      id: "941800000000000421",
+      author: { id: BOT_ID },
+      embeds: payload.embeds.map((embed) => embed.toJSON()),
+      edit: async (updatedPayload) => {
+        edits.push(updatedPayload);
+        message.embeds = updatedPayload.embeds.map((embed) => embed.toJSON());
+        return message;
+      },
+    };
+    history.set(message.id, message);
+    return message;
+  };
+
+  const welcomeChannel = {
+    guild,
+    guildId: GUILD_ID,
+    isTextBased: () => true,
+  };
+  const client = {
+    user: { id: BOT_ID },
+    channels: { fetch: async () => welcomeChannel },
+  };
+  const onboarding = createOnboardingService(client, { guideStore });
+
+  assert.equal(await onboarding.provision(), true);
+  assert.equal(sends, 1);
+  assert.equal(guideStore.messageId, "941800000000000421");
+  assert.equal(await onboarding.provision(), true);
+  assert.equal(sends, 1);
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].embeds[0].data.footer.text, ONBOARDING_GUIDE_FOOTER);
+});
+
+test("an existing bot guide is reused without changing unrelated start messages", async () => {
+  const startChannel = {
+    id: "941800000000000430",
+    name: "start",
+    type: ChannelType.GuildText,
+    guildId: GUILD_ID,
+    isTextBased: () => true,
+  };
+  const { guild } = makeGuild({ channels: [startChannel] });
+  startChannel.guild = guild;
+
+  let sends = 0;
+  let edits = 0;
+  const existingGuide = {
+    id: "941800000000000431",
+    author: { id: BOT_ID },
+    embeds: [{ footer: { text: ONBOARDING_GUIDE_FOOTER } }],
+    edit: async () => {
+      edits += 1;
+      return existingGuide;
+    },
+  };
+  const unrelatedMessage = {
+    id: "941800000000000432",
+    author: { id: "941800000000000433" },
+    embeds: [],
+    edit: async () => assert.fail("unrelated messages must not be edited"),
+  };
+  const history = new Collection([
+    [existingGuide.id, existingGuide],
+    [unrelatedMessage.id, unrelatedMessage],
+  ]);
+  startChannel.messages = { fetch: async () => history };
+  startChannel.send = async () => {
+    sends += 1;
+  };
+
+  const welcomeChannel = {
+    guild,
+    guildId: GUILD_ID,
+    isTextBased: () => true,
+  };
+  const onboarding = createOnboardingService(
+    { user: { id: BOT_ID }, channels: { fetch: async () => welcomeChannel } },
+    { guideStore: { getMessageId: () => null, setMessageId: () => {} } },
+  );
+
+  assert.equal(await onboarding.provision(), true);
+  assert.equal(edits, 1);
+  assert.equal(sends, 0);
+  assert.equal(unrelatedMessage.embeds.length, 0);
 });
 
 test("the onboarding service does not post in a different guild", async () => {

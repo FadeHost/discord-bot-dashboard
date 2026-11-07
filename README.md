@@ -124,17 +124,21 @@ clicks to fix and means there is nothing on disk worth stealing.
 /data/settings.json   one entry per server: the two channels and the message
 /data/memory.json     bounded per-guild, per-user conversation history
 /data/private-chats.json   private-chat owners, invitees, and lobby guide IDs
+/data/onboarding-guide.json the reusable #start onboarding guide message ID
 ```
 
 Production startup requires this file to exist; it will not initialize empty
 settings automatically. Only local development can start without it. For a
 confirmed new production installation, create `{}` in the persistent data
 directory before starting. Do not do this when restoring an existing install.
+The onboarding guide file is initialized if it is missing. If it is malformed,
+startup stops without rewriting it; repair it or restore it from a backup.
 
 ## Backup and recovery
 
 The app currently has no database. Its durable application data is
-`settings.json`, `memory.json`, and `private-chats.json` under `DATA_DIR`.
+`settings.json`, `memory.json`, `private-chats.json`, `moderation-logs.json`,
+and `onboarding-guide.json` under `DATA_DIR`.
 Point `DATA_DIR` at a persistent disk or mounted directory on the host. Outside
 `NODE_ENV=development`, the app only uses an existing `DATA_DIR` or `/data` and
 stops if that storage is unavailable; it never switches to `./data`. Local
