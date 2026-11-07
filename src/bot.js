@@ -7,6 +7,7 @@ import { ChannelType, Client, EmbedBuilder, Events, GatewayIntentBits, Permissio
 
 import { createMessageResponder } from "./message-handler.js";
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
+import { attachMessageDeletionSystem } from "./message-deletion.js";
 import { attachPrivateChatSystem } from "./private-chat-system.js";
 import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
 import { renderWelcome } from "./settings.js";
@@ -21,10 +22,11 @@ const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf871
  * @param {string} options.applicationId
  * @param {import("./settings.js").SettingsStore} options.settings
  * @param {import("./private-chat-store.js").PrivateChatStore} options.privateChats
+ * @param {import("./moderation-log-store.js").ModerationLogStore} options.moderationLogs
  * @param {(message: string) => Promise<string>} [options.generateReply]
  * @returns {Client}
  */
-export function createBot({ token, applicationId, settings, generateReply, memory, privateChats }) {
+export function createBot({ token, applicationId, settings, generateReply, memory, privateChats, moderationLogs }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -88,7 +90,7 @@ export function createBot({ token, applicationId, settings, generateReply, memor
   });
 
   client.on(Events.MessageDelete, async (message) => {
-    if (!message.guild || message.author?.bot) return;
+    if (!shouldPubliclyLogDeletedMessage(message, moderationLogs)) return;
 
     const config = settings.get(message.guild.id);
 
@@ -130,6 +132,7 @@ export function createBot({ token, applicationId, settings, generateReply, memor
     store: privateChats,
     lobbyChannelId: PRIVATE_CHAT_LOBBY_CHANNEL_ID,
   });
+  attachMessageDeletionSystem(client, { settings, moderationLogs });
 
   client.login(token).catch((error) => {
     if (String(error?.code) === "TokenInvalid" || String(error).includes("TOKEN_INVALID")) {
@@ -153,6 +156,14 @@ export function createBot({ token, applicationId, settings, generateReply, memor
   });
 
   return client;
+}
+
+export function shouldPubliclyLogDeletedMessage(message, moderationLogs) {
+  return Boolean(
+    message?.guild &&
+      !message.author?.bot &&
+      !moderationLogs?.isPrivateModerationDelete?.(message.id),
+  );
 }
 
 /**

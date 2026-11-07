@@ -10,7 +10,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 
 function createFixture(
   t,
-  { includeSettings = true, includeMemory = true, includePrivateChats = true } = {},
+  {
+    includeSettings = true,
+    includeMemory = true,
+    includePrivateChats = true,
+    includeModerationLogs = true,
+  } = {},
 ) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "sugar-backup-test-"));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
@@ -56,6 +61,7 @@ function createFixture(
   const settingsFile = path.join(dataDir, "settings.json");
   const memoryFile = path.join(dataDir, "memory.json");
   const privateChatsFile = path.join(dataDir, "private-chats.json");
+  const moderationLogsFile = path.join(dataDir, "moderation-logs.json");
   if (includeSettings) {
     fs.writeFileSync(
       settingsFile,
@@ -99,8 +105,35 @@ function createFixture(
       }),
     );
   }
+  if (includeModerationLogs) {
+    fs.writeFileSync(
+      moderationLogsFile,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            id: "123e4567-e89b-42d3-a456-426614174000",
+            action: "mod-delete",
+            guildId: "941800000000000001",
+            channelId: "941800000000000002",
+            actorId: "941800000000000005",
+            targetId: "941800000000000006",
+            requestedCount: 1,
+            selectedCount: 1,
+            messageIds: ["941800000000000007"],
+            status: "completed",
+            deletedCount: 1,
+            skippedCount: 0,
+            failedCount: 0,
+            createdAt: "2026-11-06T07:38:31.000Z",
+            completedAt: "2026-11-06T07:38:32.000Z",
+          },
+        ],
+      }),
+    );
+  }
 
-  return { base, root, dataDir, settingsFile, memoryFile, privateChatsFile };
+  return { base, root, dataDir, settingsFile, memoryFile, privateChatsFile, moderationLogsFile };
 }
 
 function runScript(fixture, script, args) {
@@ -141,6 +174,7 @@ test("FadeHost-style backup and restore preserve app data and code without inclu
   assert.ok(entries.includes("./data/settings.json"));
   assert.ok(entries.includes("./data/memory.json"));
   assert.ok(entries.includes("./data/private-chats.json"));
+  assert.ok(entries.includes("./data/moderation-logs.json"));
   assert.ok(entries.includes("./.env.example"));
   assert.ok(
     !entries.some(
@@ -169,6 +203,10 @@ test("FadeHost-style backup and restore preserve app data and code without inclu
     fs.readFileSync(path.join(restoreDir, "data", "private-chats.json"), "utf8"),
     fs.readFileSync(fixture.privateChatsFile, "utf8"),
   );
+  assert.equal(
+    fs.readFileSync(path.join(restoreDir, "data", "moderation-logs.json"), "utf8"),
+    fs.readFileSync(fixture.moderationLogsFile, "utf8"),
+  );
   assert.equal(fs.readFileSync(path.join(restoreDir, "index.js"), "utf8"), "export const fixture = true;\n");
   assert.equal(fs.existsSync(path.join(restoreDir, ".env")), false);
   assert.equal(fs.existsSync(path.join(restoreDir, "config", "credentials.json")), false);
@@ -184,6 +222,7 @@ test("backup does not fabricate app data files that are absent", (t) => {
     includeSettings: false,
     includeMemory: false,
     includePrivateChats: false,
+    includeModerationLogs: false,
   });
   const outputDir = path.join(fixture.base, "external-backups");
   const result = runScript(fixture, "backup.sh", [outputDir]);
@@ -195,6 +234,7 @@ test("backup does not fabricate app data files that are absent", (t) => {
   assert.ok(!entries.includes("./data/settings.json"));
   assert.ok(!entries.includes("./data/memory.json"));
   assert.ok(!entries.includes("./data/private-chats.json"));
+  assert.ok(!entries.includes("./data/moderation-logs.json"));
 });
 
 test("restore rejects archives containing symlinks before extraction", (t) => {

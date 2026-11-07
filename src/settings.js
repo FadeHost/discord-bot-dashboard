@@ -52,6 +52,8 @@ export function blankSettings() {
     welcomeChannelId: null,
     welcomeMessage: DEFAULT_WELCOME,
     logChannelId: null,
+    vipRoleIds: [],
+    moderatorRoleIds: [],
   };
 }
 
@@ -60,14 +62,40 @@ export function blankSettings() {
  * posts a form, and a form can say anything.
  *
  * @param {Record<string, unknown>} input
- * @returns {{welcomeChannelId: string|null, welcomeMessage: string, logChannelId: string|null}}
+ * @returns {{welcomeChannelId: string|null, welcomeMessage: string, logChannelId: string|null, vipRoleIds: string[], moderatorRoleIds: string[]}}
  */
 export function cleanSettings(input = {}) {
   return {
     welcomeChannelId: channelId(input.welcomeChannelId),
     welcomeMessage: String(input.welcomeMessage ?? DEFAULT_WELCOME).slice(0, 1500).trim() || DEFAULT_WELCOME,
     logChannelId: channelId(input.logChannelId),
+    vipRoleIds: parseRoleIds(input.vipRoleIds).ids,
+    moderatorRoleIds: parseRoleIds(input.moderatorRoleIds).ids,
   };
+}
+
+/** Parse role IDs entered as a comma-, space-, or newline-separated list. */
+export function parseRoleIds(value) {
+  const tokens = (Array.isArray(value) ? value : [value])
+    .flatMap((entry) => String(entry ?? "").split(/[,\s]+/u))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const ids = [];
+  const invalid = [];
+
+  for (const token of tokens) {
+    if (!/^\d{5,25}$/u.test(token)) {
+      invalid.push(token);
+    } else if (!ids.includes(token)) {
+      if (ids.length >= 20) {
+        invalid.push(token);
+      } else {
+        ids.push(token);
+      }
+    }
+  }
+
+  return { ids, invalid };
 }
 
 // Discord snowflakes are digits. Anything else means "off".
@@ -88,7 +116,12 @@ export class SettingsStore {
 
   /** @param {string} guildId */
   get(guildId) {
-    return { ...blankSettings(), ...(this.data[guildId] ?? {}) };
+    const settings = { ...blankSettings(), ...(this.data[guildId] ?? {}) };
+    return {
+      ...settings,
+      vipRoleIds: [...settings.vipRoleIds],
+      moderatorRoleIds: [...settings.moderatorRoleIds],
+    };
   }
 
   /**
@@ -174,7 +207,19 @@ function isStoredSettings(settings) {
     (settings.logChannelId === undefined ||
       settings.logChannelId === null ||
       typeof settings.logChannelId === "string") &&
-    (settings.welcomeMessage === undefined || typeof settings.welcomeMessage === "string")
+    (settings.welcomeMessage === undefined || typeof settings.welcomeMessage === "string") &&
+    isStoredRoleIds(settings.vipRoleIds) &&
+    isStoredRoleIds(settings.moderatorRoleIds)
+  );
+}
+
+function isStoredRoleIds(value) {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= 20 &&
+      value.every((id) => typeof id === "string" && /^\d{5,25}$/u.test(id)) &&
+      new Set(value).size === value.length)
   );
 }
 
