@@ -10,6 +10,7 @@ import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { attachMessageDeletionSystem } from "./message-deletion.js";
 import { attachPrivateChatSystem } from "./private-chat-system.js";
 import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
+import { createOnboardingService } from "./onboarding.js";
 import { createProfileWelcome, PROFILE_WELCOME_CHANNEL_ID } from "./profile-welcome.js";
 import { renderWelcome } from "./settings.js";
 
@@ -33,17 +34,24 @@ export function createBot({ token, applicationId, settings, generateReply, memor
       GatewayIntentBits.Guilds,
       // Privileged. Turn Server Members on in the Developer Portal.
       GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildMessageReactions,
       GatewayIntentBits.GuildMessages,
       // Privileged. Turn Message Content on to log what a deleted message said.
       GatewayIntentBits.MessageContent,
     ],
     // Without these, a deleted or edited message that is not in the cache
     // (anything from before the bot started) arrives empty and is dropped.
-    partials: [Partials.Message, Partials.Channel],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
+  const onboarding = createOnboardingService(client);
 
   client.once(Events.ClientReady, () => {
     console.log(`[bot] logged in as ${client.user.tag} in ${client.guilds.cache.size} server(s)`);
+  });
+  client.once(Events.ClientReady, () => {
+    void onboarding.provision().catch((error) => {
+      console.error(`[onboarding] setup failed (${error?.code ?? "unknown error"})`);
+    });
   });
 
   if (generateReply) {
@@ -59,6 +67,7 @@ export function createBot({ token, applicationId, settings, generateReply, memor
 
   client.on(Events.GuildMemberAdd, async (member) => {
     await assignNewMemberRole(member);
+    await onboarding.sendWelcome(member);
     const config = settings.get(member.guild.id);
 
     if (config.welcomeChannelId) {
@@ -80,6 +89,14 @@ export function createBot({ token, applicationId, settings, generateReply, memor
     });
 
     await sendProfileWelcome(client, member, generateReply);
+  });
+
+  client.on(Events.MessageReactionAdd, (reaction, user) => {
+    void onboarding.handleReaction(reaction, user);
+  });
+
+  client.on(Events.ChannelDelete, (channel) => {
+    onboarding.invalidateGuild(channel.guildId);
   });
 
   client.on(Events.GuildMemberRemove, async (member) => {
