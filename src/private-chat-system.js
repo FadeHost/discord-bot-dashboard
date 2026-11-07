@@ -7,8 +7,6 @@ import {
   Events,
   ModalBuilder,
   PermissionFlagsBits,
-  REST,
-  Routes,
   SlashCommandBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -16,6 +14,8 @@ import {
 } from "discord.js";
 
 import { MAX_PRIVATE_CHAT_MEMBERS } from "./private-chat-store.js";
+import { buildMessageDeletionCommands } from "./message-deletion.js";
+import { registerApplicationCommands } from "./command-registry.js";
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { formatPrivateChatChannelName, normalizeCategoryName } from "./private-chat-format.js";
 
@@ -117,9 +117,23 @@ export function buildPrivateChatPermissionOverwrites({ everyoneId, ownerId, memb
 export function attachPrivateChatSystem(client, { token, applicationId, store, lobbyChannelId }) {
   if (!store) throw new Error("A private-chat store is required.");
 
+  let readyHandled = false;
   client.once(Events.ClientReady, () => {
+    readyHandled = true;
     void initializePrivateChatLobby(client, { token, applicationId, store, lobbyChannelId }).catch((error) => {
       console.error(`[private-chats] setup failed: ${error.message}`);
+    });
+  });
+
+  client.on(Events.GuildCreate, (guild) => {
+    if (!readyHandled) return;
+    void registerApplicationCommands({
+      token,
+      applicationId,
+      guildId: guild.id,
+      commands: buildMessageDeletionCommands(),
+    }).catch((error) => {
+      console.error(`[commands] could not register message-deletion commands in ${guild.id}: ${error.message}`);
     });
   });
 
@@ -141,16 +155,34 @@ export function attachPrivateChatSystem(client, { token, applicationId, store, l
 }
 
 async function initializePrivateChatLobby(client, { token, applicationId, store, lobbyChannelId }) {
-  const lobby = await client.channels.fetch(lobbyChannelId);
-  if (!lobby || lobby.type !== ChannelType.GuildText) {
-    throw new Error(`The configured private-chat lobby ${lobbyChannelId} is not a server text channel.`);
+  let lobby = null;
+  let lobbyError = null;
+  try {
+    lobby = await client.channels.fetch(lobbyChannelId);
+  } catch (error) {
+    lobbyError = error;
   }
 
-  try {
-    await registerPrivateChatCommand({ token, applicationId, guildId: lobby.guildId });
-    console.log(`[private-chats] /${COMMAND_NAME} registered for the lobby server`);
-  } catch (error) {
-    console.error(`[private-chats] slash-command registration failed: ${error.message}`);
+  const guildIds = new Set(client.guilds.cache.keys());
+  if (lobby?.guildId) guildIds.add(lobby.guildId);
+  for (const guildId of guildIds) {
+    const commands = buildMessageDeletionCommands();
+    if (lobby?.type === ChannelType.GuildText && guildId === lobby.guildId) {
+      commands.unshift(buildPrivateChatCommand());
+    }
+    try {
+      await registerApplicationCommands({ token, applicationId, guildId, commands });
+      console.log(`[commands] registered in server ${guildId}`);
+    } catch (error) {
+      console.error(`[commands] registration failed in ${guildId}: ${error.message}`);
+    }
+  }
+
+  if (!lobby || lobby.type !== ChannelType.GuildText) {
+    throw new Error(
+      `The configured private-chat lobby ${lobbyChannelId} is not an available server text channel` +
+        (lobbyError ? ` (${lobbyError.code ?? "fetch failed"})` : "."),
+    );
   }
 
   try {
@@ -164,24 +196,6 @@ async function initializePrivateChatLobby(client, { token, applicationId, store,
   } catch (error) {
     console.error(`[private-chats] could not update existing private-chat panels: ${error.message}`);
   }
-}
-
-async function registerPrivateChatCommand({ token, applicationId, guildId }) {
-  if (!token || !applicationId || !guildId) {
-    throw new Error("The bot token, application ID, and lobby server ID are required.");
-  }
-
-  const rest = new REST({ version: "10" }).setToken(token);
-  const route = Routes.applicationGuildCommands(applicationId, guildId);
-  const existing = await rest.get(route);
-  if (!Array.isArray(existing)) throw new Error("Discord returned an invalid guild-command list.");
-
-  // Guild command registration replaces the full list, so preserve commands
-  // owned by this application that are unrelated to private chats.
-  const commands = existing.filter((command) => command.name !== COMMAND_NAME);
-  commands.push(buildPrivateChatCommand());
-  if (commands.length > 100) throw new Error("The server command limit would be exceeded.");
-  await rest.put(route, { body: commands });
 }
 
 async function ensureLobbyGuide(lobby, client, store) {

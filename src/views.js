@@ -153,6 +153,10 @@ export function guildPage({ guild, settings, channels, csrf, saved = false, warn
         ),
       )
       .join("");
+  const vipRoleIds = escapeHtml(Array.isArray(settings.vipRoleIds) ? settings.vipRoleIds.join(", ") : "");
+  const moderatorRoleIds = escapeHtml(
+    Array.isArray(settings.moderatorRoleIds) ? settings.moderatorRoleIds.join(", ") : "",
+  );
 
   return layout({
     title: guild.name,
@@ -181,6 +185,18 @@ ${warning ? `<div class="banner bad">${escapeHtml(warning)}</div>` : ""}
     <div class="field">
       <label for="logChannelId">Channel <span class="hint">joins, leaves, edited and deleted messages</span></label>
       <select id="logChannelId" name="logChannelId">${options(settings.logChannelId)}</select>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Message deletion roles</h2>
+    <p class="sub">Enter Discord role IDs separated by commas. Leave a field empty to disable that role-based command.</p>
+    <div class="field">
+      <label for="vipRoleIds">VIP role IDs <span class="hint">members can delete only their own messages</span></label>
+      <textarea id="vipRoleIds" name="vipRoleIds" maxlength="500">${vipRoleIds}</textarea>
+    </div>
+    <div class="field">
+      <label for="moderatorRoleIds">Moderator role IDs <span class="hint">authorized moderators can delete member messages</span></label>
+      <textarea id="moderatorRoleIds" name="moderatorRoleIds" maxlength="500">${moderatorRoleIds}</textarea>
     </div>
   </div>
   <div class="actions"><button type="submit">Save</button></div>

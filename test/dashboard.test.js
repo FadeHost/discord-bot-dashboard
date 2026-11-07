@@ -14,7 +14,14 @@ import {
   timingSafeEqual,
 } from "../src/oauth.js";
 import { Sessions, readCookie } from "../src/session.js";
-import { DEFAULT_WELCOME, SettingsStore, cleanSettings, renderWelcome, resolveDataDir } from "../src/settings.js";
+import {
+  DEFAULT_WELCOME,
+  SettingsStore,
+  cleanSettings,
+  parseRoleIds,
+  renderWelcome,
+  resolveDataDir,
+} from "../src/settings.js";
 import { escapeHtml, guildPage, loginPage } from "../src/views.js";
 
 function tempDir() {
@@ -142,6 +149,8 @@ test("settings survive a new store over the same directory, like a redeploy", ()
     welcomeChannelId: "941800000000000002",
     welcomeMessage: "Hi {user}",
     logChannelId: "941800000000000003",
+    vipRoleIds: ["941800000000000004"],
+    moderatorRoleIds: ["941800000000000005"],
   });
 
   const after = new SettingsStore(dir);
@@ -149,6 +158,8 @@ test("settings survive a new store over the same directory, like a redeploy", ()
     welcomeChannelId: "941800000000000002",
     welcomeMessage: "Hi {user}",
     logChannelId: "941800000000000003",
+    vipRoleIds: ["941800000000000004"],
+    moderatorRoleIds: ["941800000000000005"],
   });
 });
 
@@ -158,6 +169,8 @@ test("a guild nobody configured gets the defaults", () => {
     welcomeChannelId: null,
     welcomeMessage: DEFAULT_WELCOME,
     logChannelId: null,
+    vipRoleIds: [],
+    moderatorRoleIds: [],
   });
 });
 
@@ -165,6 +178,35 @@ test("a channel id that is not a snowflake means off", () => {
   const clean = cleanSettings({ welcomeChannelId: "../../etc", logChannelId: "<script>", welcomeMessage: "Hi" });
   assert.equal(clean.welcomeChannelId, null);
   assert.equal(clean.logChannelId, null);
+});
+
+test("role IDs accept comma-separated snowflakes, remove duplicates, and reject invalid input", () => {
+  assert.deepEqual(parseRoleIds("941800000000000010, 941800000000000011\n941800000000000010"), {
+    ids: ["941800000000000010", "941800000000000011"],
+    invalid: [],
+  });
+  assert.deepEqual(parseRoleIds("moderator, 941800000000000012"), {
+    ids: ["941800000000000012"],
+    invalid: ["moderator"],
+  });
+  assert.deepEqual(parseRoleIds(""), { ids: [], invalid: [] });
+});
+
+test("the dashboard renders VIP and moderator role-ID settings", () => {
+  const html = guildPage({
+    guild: { id: "941800000000000001", name: "Test server" },
+    settings: cleanSettings({
+      vipRoleIds: ["941800000000000010"],
+      moderatorRoleIds: ["941800000000000011"],
+    }),
+    channels: [],
+    csrf: "csrf-token",
+  });
+
+  assert.match(html, /name="vipRoleIds"/);
+  assert.match(html, /name="moderatorRoleIds"/);
+  assert.match(html, /941800000000000010/);
+  assert.match(html, /941800000000000011/);
 });
 
 test("an empty welcome message falls back to the default", () => {
@@ -182,7 +224,13 @@ test("nothing outside the three known fields is stored", () => {
     token: "leak me",
   });
 
-  assert.deepEqual(Object.keys(saved).sort(), ["logChannelId", "welcomeChannelId", "welcomeMessage"]);
+  assert.deepEqual(Object.keys(saved).sort(), [
+    "logChannelId",
+    "moderatorRoleIds",
+    "vipRoleIds",
+    "welcomeChannelId",
+    "welcomeMessage",
+  ]);
 });
 
 test("corrupt settings stop loading without changing the file", () => {
@@ -211,6 +259,8 @@ test("development may initialize empty settings when the file is missing", () =>
     welcomeChannelId: null,
     welcomeMessage: DEFAULT_WELCOME,
     logChannelId: null,
+    vipRoleIds: [],
+    moderatorRoleIds: [],
   });
   assert.equal(fs.existsSync(path.join(dir, "settings.json")), false);
 });
