@@ -15,6 +15,7 @@ function createFixture(
     includeMemory = true,
     includePrivateChats = true,
     includeModerationLogs = true,
+    includeOnboardingGuide = true,
   } = {},
 ) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "sugar-backup-test-"));
@@ -62,6 +63,7 @@ function createFixture(
   const memoryFile = path.join(dataDir, "memory.json");
   const privateChatsFile = path.join(dataDir, "private-chats.json");
   const moderationLogsFile = path.join(dataDir, "moderation-logs.json");
+  const onboardingGuideFile = path.join(dataDir, "onboarding-guide.json");
   if (includeSettings) {
     fs.writeFileSync(
       settingsFile,
@@ -132,8 +134,23 @@ function createFixture(
       }),
     );
   }
+  if (includeOnboardingGuide) {
+    fs.writeFileSync(
+      onboardingGuideFile,
+      JSON.stringify({ version: 1, messageIds: { "941800000000000004": "941800000000000007" } }),
+    );
+  }
 
-  return { base, root, dataDir, settingsFile, memoryFile, privateChatsFile, moderationLogsFile };
+  return {
+    base,
+    root,
+    dataDir,
+    settingsFile,
+    memoryFile,
+    privateChatsFile,
+    moderationLogsFile,
+    onboardingGuideFile,
+  };
 }
 
 function runScript(fixture, script, args) {
@@ -175,6 +192,7 @@ test("FadeHost-style backup and restore preserve app data and code without inclu
   assert.ok(entries.includes("./data/memory.json"));
   assert.ok(entries.includes("./data/private-chats.json"));
   assert.ok(entries.includes("./data/moderation-logs.json"));
+  assert.ok(entries.includes("./data/onboarding-guide.json"));
   assert.ok(entries.includes("./.env.example"));
   assert.ok(
     !entries.some(
@@ -207,6 +225,10 @@ test("FadeHost-style backup and restore preserve app data and code without inclu
     fs.readFileSync(path.join(restoreDir, "data", "moderation-logs.json"), "utf8"),
     fs.readFileSync(fixture.moderationLogsFile, "utf8"),
   );
+  assert.equal(
+    fs.readFileSync(path.join(restoreDir, "data", "onboarding-guide.json"), "utf8"),
+    fs.readFileSync(fixture.onboardingGuideFile, "utf8"),
+  );
   assert.equal(fs.readFileSync(path.join(restoreDir, "index.js"), "utf8"), "export const fixture = true;\n");
   assert.equal(fs.existsSync(path.join(restoreDir, ".env")), false);
   assert.equal(fs.existsSync(path.join(restoreDir, "config", "credentials.json")), false);
@@ -223,6 +245,7 @@ test("backup does not fabricate app data files that are absent", (t) => {
     includeMemory: false,
     includePrivateChats: false,
     includeModerationLogs: false,
+    includeOnboardingGuide: false,
   });
   const outputDir = path.join(fixture.base, "external-backups");
   const result = runScript(fixture, "backup.sh", [outputDir]);
@@ -235,6 +258,7 @@ test("backup does not fabricate app data files that are absent", (t) => {
   assert.ok(!entries.includes("./data/memory.json"));
   assert.ok(!entries.includes("./data/private-chats.json"));
   assert.ok(!entries.includes("./data/moderation-logs.json"));
+  assert.ok(!entries.includes("./data/onboarding-guide.json"));
 });
 
 test("restore rejects archives containing symlinks before extraction", (t) => {

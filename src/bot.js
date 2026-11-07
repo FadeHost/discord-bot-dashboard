@@ -25,10 +25,20 @@ const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf871
  * @param {import("./settings.js").SettingsStore} options.settings
  * @param {import("./private-chat-store.js").PrivateChatStore} options.privateChats
  * @param {import("./moderation-log-store.js").ModerationLogStore} options.moderationLogs
+ * @param {import("./onboarding-guide-store.js").OnboardingGuideStore} [options.onboardingGuides]
  * @param {(message: string) => Promise<string>} [options.generateReply]
  * @returns {Client}
  */
-export function createBot({ token, applicationId, settings, generateReply, memory, privateChats, moderationLogs }) {
+export function createBot({
+  token,
+  applicationId,
+  settings,
+  generateReply,
+  memory,
+  privateChats,
+  moderationLogs,
+  onboardingGuides,
+}) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -43,7 +53,7 @@ export function createBot({ token, applicationId, settings, generateReply, memor
     // (anything from before the bot started) arrives empty and is dropped.
     partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
-  const onboarding = createOnboardingService(client);
+  const onboarding = createOnboardingService(client, { guideStore: onboardingGuides });
 
   client.once(Events.ClientReady, () => {
     console.log(`[bot] logged in as ${client.user.tag} in ${client.guilds.cache.size} server(s)`);
