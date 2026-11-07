@@ -10,11 +10,41 @@ export const ONBOARDING_GUIDE_FOOTER = "Sugar AI onboarding • #start guide";
 
 const TEXT_CHANNEL_TYPES = new Set([ChannelType.GuildText, ChannelType.GuildAnnouncement]);
 const REQUIRED_CHANNELS = [
-  { name: "rules", type: ChannelType.GuildText },
-  { name: "help", type: ChannelType.GuildText },
-  { name: "start", type: ChannelType.GuildText },
-  { name: "guide", type: ChannelType.GuildText },
-  { name: "news", type: ChannelType.GuildAnnouncement },
+  {
+    name: "rules",
+    label: "rules",
+    emoji: "📄",
+    aliases: ["rules", "server-rules"],
+    type: ChannelType.GuildText,
+  },
+  {
+    name: "help",
+    label: "help",
+    emoji: "❓",
+    aliases: ["help", "server-help", "information"],
+    type: ChannelType.GuildText,
+  },
+  {
+    name: "start",
+    label: "start",
+    emoji: "👋",
+    aliases: ["start", "start-here", "get-started", "getting-started"],
+    type: ChannelType.GuildText,
+  },
+  {
+    name: "guide",
+    label: "guide",
+    emoji: "📖",
+    aliases: ["guide", "server-guide"],
+    type: ChannelType.GuildText,
+  },
+  {
+    name: "news",
+    label: "announcements",
+    emoji: "📢",
+    aliases: ["news", "announcement", "announcements", "updates"],
+    type: ChannelType.GuildAnnouncement,
+  },
 ];
 
 const CHANNEL_GUIDANCE = {
@@ -27,31 +57,68 @@ const CHANNEL_GUIDANCE = {
 
 export async function ensureOnboardingChannels(guild) {
   let currentChannels = guild.channels.cache;
+  let channelInventoryAvailable = false;
   try {
     const fetchedChannels = await guild.channels.fetch();
-    if (fetchedChannels?.values) currentChannels = fetchedChannels;
+    if (fetchedChannels?.values) {
+      currentChannels = fetchedChannels;
+      channelInventoryAvailable = true;
+    }
   } catch (error) {
     console.error(`[onboarding] could not list channels in guild ${guild.id} (${error?.code ?? "unknown error"})`);
   }
 
   const channels = new Map();
   for (const definition of REQUIRED_CHANNELS) {
-    const sameNameChannels = [...(currentChannels?.values?.() ?? [])].filter(
-      (channel) => channel.name === definition.name,
+    const intendedChannels = [...(currentChannels?.values?.() ?? [])].filter(
+      (channel) => channelPurpose(channel.name) === definition.name,
     );
-    const existing = sameNameChannels.find((channel) => TEXT_CHANNEL_TYPES.has(channel.type));
+    const existingTextChannels = intendedChannels
+      .filter((channel) => TEXT_CHANNEL_TYPES.has(channel.type))
+      .sort((left, right) => channelPreference(left, definition) - channelPreference(right, definition));
+    let existing = existingTextChannels[0];
     if (existing) {
+      if (intendedChannels.length > 1) {
+        console.warn(
+          `[onboarding] multiple channels match #${definition.name} in guild ${guild.id}; reusing the best existing match`,
+        );
+      } else if (
+        channelInventoryAvailable &&
+        isPlainOnboardingAlias(existing.name, definition) &&
+        typeof existing.setName === "function"
+      ) {
+        try {
+          const renamed = await existing.setName(
+            formatOnboardingChannelName(definition),
+            "Apply Kittisugar channel naming style",
+          );
+          if (renamed) existing = renamed;
+          currentChannels?.set?.(existing.id, existing);
+        } catch (error) {
+          console.warn(
+            `[onboarding] could not restyle the existing #${definition.name} channel in guild ${guild.id} (${error?.code ?? "unknown error"}); reusing it without creating a duplicate`,
+          );
+        }
+      }
       channels.set(definition.name, existing);
       continue;
     }
-    if (sameNameChannels.length) {
-      console.warn(`[onboarding] #${definition.name} already exists as a non-text channel in guild ${guild.id}; leaving it unchanged`);
+    if (intendedChannels.length) {
+      console.warn(
+        `[onboarding] a non-text channel matches #${definition.name} in guild ${guild.id}; leaving it unchanged`,
+      );
+      continue;
+    }
+    if (!channelInventoryAvailable) {
+      console.warn(
+        `[onboarding] cannot confirm #${definition.name} is absent in guild ${guild.id}; skipping channel creation`,
+      );
       continue;
     }
 
     try {
       const created = await guild.channels.create({
-        name: definition.name,
+        name: formatOnboardingChannelName(definition),
         type: definition.type,
       });
       channels.set(definition.name, created);
@@ -61,7 +128,7 @@ export async function ensureOnboardingChannels(guild) {
         console.warn(`[onboarding] announcement channel creation is unavailable in guild ${guild.id}; creating #news as a text channel`);
         try {
           const created = await guild.channels.create({
-            name: definition.name,
+            name: formatOnboardingChannelName(definition),
             type: ChannelType.GuildText,
           });
           channels.set(definition.name, created);
@@ -80,6 +147,35 @@ export async function ensureOnboardingChannels(guild) {
   }
 
   return channels;
+}
+
+function formatOnboardingChannelName(definition) {
+  return `${definition.emoji} | ୨୧ • ${toRoyalBold(definition.label)}`;
+}
+
+function channelPurpose(channelName) {
+  const normalizedName = normalizeOnboardingChannelName(channelName);
+  if (!normalizedName) return null;
+  return REQUIRED_CHANNELS.find((definition) =>
+    definition.aliases.some((alias) => normalizeOnboardingChannelName(alias) === normalizedName),
+  )?.name ?? null;
+}
+
+function normalizeOnboardingChannelName(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .replace(/[୨୧]/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+function isPlainOnboardingAlias(channelName, definition) {
+  return definition.aliases.includes(String(channelName ?? "").toLowerCase());
+}
+
+function channelPreference(channel, definition) {
+  if (channel.name === formatOnboardingChannelName(definition)) return 0;
+  return isPlainOnboardingAlias(channel.name, definition) ? 2 : 1;
 }
 
 export function buildOnboardingWelcomePayload({ guildName, memberId, channels }) {
@@ -302,7 +398,14 @@ export function createOnboardingService(client, { guideStore } = {}) {
 
     async sendWelcome(member) {
       const channel = await getTargetChannel();
-      if (!channel?.isTextBased?.() || channel.guildId !== member.guild.id) return false;
+      if (!channel?.isTextBased?.()) {
+        console.error(`[onboarding] welcome channel ${ONBOARDING_CHANNEL_ID} is not text-based`);
+        return false;
+      }
+      if (channel.guildId !== member.guild.id) {
+        console.error(`[onboarding] welcome channel ${ONBOARDING_CHANNEL_ID} is not in guild ${member.guild.id}`);
+        return false;
+      }
 
       let message;
       try {

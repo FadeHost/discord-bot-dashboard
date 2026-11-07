@@ -21,6 +21,13 @@ const MEMBER_ID = "941800000000000411";
 const NEW_ROLE_ID = "941800000000000412";
 const MEMBER_ROLE_ID = "941800000000000413";
 const BOT_ID = "941800000000000414";
+const STYLED_CHANNEL_NAMES = {
+  rules: "📄 | ୨୧ • 𝓻𝓾𝓵𝓮𝓼",
+  help: "❓ | ୨୧ • 𝓱𝓮𝓵𝓹",
+  start: "👋 | ୨୧ • 𝓼𝓽𝓪𝓻𝓽",
+  guide: "📖 | ୨୧ • 𝓰𝓾𝓲𝓭𝓮",
+  news: "📢 | ୨୧ • 𝓪𝓷𝓷𝓸𝓾𝓷𝓬𝓮𝓶𝓮𝓷𝓽𝓼",
+};
 
 function makeGuild({ channels = [], roles = [], memberRoleIds = [NEW_ROLE_ID], addError = null, removeError = null } = {}) {
   const createdChannels = [];
@@ -93,7 +100,14 @@ test("onboarding setup creates missing channels and uses an announcement channel
 
   assert.deepEqual([...channels.keys()], ["rules", "help", "start", "guide", "news"]);
   assert.equal(createdChannels.length, 5);
-  assert.equal(createdChannels.find(({ options }) => options.name === "news").options.type, ChannelType.GuildAnnouncement);
+  assert.deepEqual(
+    createdChannels.map(({ options }) => options.name),
+    Object.values(STYLED_CHANNEL_NAMES),
+  );
+  assert.equal(
+    createdChannels.find(({ options }) => options.name === STYLED_CHANNEL_NAMES.news).options.type,
+    ChannelType.GuildAnnouncement,
+  );
 });
 
 test("news falls back to a text channel when Discord rejects announcement-channel creation", async () => {
@@ -102,7 +116,7 @@ test("news falls back to a text channel when Discord rejects announcement-channe
   const attempts = [];
   guild.channels.create = async (options) => {
     attempts.push(options);
-    if (options.name === "news" && options.type === ChannelType.GuildAnnouncement) {
+    if (options.name === STYLED_CHANNEL_NAMES.news && options.type === ChannelType.GuildAnnouncement) {
       throw Object.assign(new Error("announcement channels unavailable"), { code: 50035 });
     }
     return createChannel(options);
@@ -118,14 +132,14 @@ test("news falls back to a text channel when Discord rejects announcement-channe
   }
 
   assert.deepEqual(
-    attempts.filter((options) => options.name === "news").map((options) => options.type),
+    attempts.filter((options) => options.name === STYLED_CHANNEL_NAMES.news).map((options) => options.type),
     [ChannelType.GuildAnnouncement, ChannelType.GuildText],
   );
   assert.equal(channels.get("news").type, ChannelType.GuildText);
 });
 
-test("existing text channels are reused without changing them", async () => {
-  const existing = ["rules", "help", "start", "guide", "news"].map((name, index) => ({
+test("existing decorated text channels are matched and reused without changes", async () => {
+  const existing = Object.values(STYLED_CHANNEL_NAMES).map((name, index) => ({
     id: String(600 + index),
     name,
     type: ChannelType.GuildText,
@@ -136,6 +150,84 @@ test("existing text channels are reused without changing them", async () => {
 
   assert.equal(createdChannels.length, 0);
   assert.equal(channels.get("news"), existing[4]);
+});
+
+test("a single legacy plain onboarding channel is renamed in place without changing permissions", async () => {
+  const permissionOverwrites = { cache: new Collection(), edit: async () => assert.fail("permissions must not change") };
+  const legacyRules = {
+    id: "640",
+    name: "rules",
+    type: ChannelType.GuildText,
+    permissionOverwrites,
+    setName: async function (name) {
+      this.name = name;
+      return this;
+    },
+  };
+  const { guild, createdChannels } = makeGuild({ channels: [legacyRules] });
+
+  const channels = await ensureOnboardingChannels(guild);
+
+  assert.equal(legacyRules.name, STYLED_CHANNEL_NAMES.rules);
+  assert.equal(channels.get("rules").id, legacyRules.id);
+  assert.equal(channels.get("rules").permissionOverwrites, permissionOverwrites);
+  assert.equal(createdChannels.some(({ options }) => options.name === STYLED_CHANNEL_NAMES.rules), false);
+});
+
+test("a decorated match wins over a plain duplicate without renaming or deleting either channel", async () => {
+  let plainRenameCalls = 0;
+  const permissionOverwrites = { cache: new Collection() };
+  const decoratedRules = {
+    id: "641",
+    name: STYLED_CHANNEL_NAMES.rules,
+    type: ChannelType.GuildText,
+    permissionOverwrites,
+  };
+  const plainRules = {
+    id: "642",
+    name: "rules",
+    type: ChannelType.GuildText,
+    setName: async () => {
+      plainRenameCalls += 1;
+    },
+  };
+  const { guild, createdChannels } = makeGuild({ channels: [plainRules, decoratedRules] });
+  const originalConsoleWarn = console.warn;
+  console.warn = () => {};
+
+  let channels;
+  try {
+    channels = await ensureOnboardingChannels(guild);
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(channels.get("rules"), decoratedRules);
+  assert.equal(plainRenameCalls, 0);
+  assert.equal(createdChannels.some(({ options }) => options.name === STYLED_CHANNEL_NAMES.rules), false);
+  assert.equal(permissionOverwrites.cache.size, 0);
+});
+
+test("channel-list failure does not create channels from an incomplete cache", async () => {
+  const { guild, createdChannels } = makeGuild();
+  guild.channels.fetch = async () => {
+    throw Object.assign(new Error("channel list unavailable"), { code: 500 });
+  };
+  const originalConsoleError = console.error;
+  const originalConsoleWarn = console.warn;
+  console.error = () => {};
+  console.warn = () => {};
+
+  let channels;
+  try {
+    channels = await ensureOnboardingChannels(guild);
+  } finally {
+    console.error = originalConsoleError;
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(channels.size, 0);
+  assert.equal(createdChannels.length, 0);
 });
 
 test("a same-name non-text channel is preserved instead of creating a duplicate", async () => {
@@ -279,11 +371,20 @@ test("the onboarding service provisions the target guild and reacts to each new 
       return message;
     },
   };
-  const client = { channels: { fetch: async () => targetChannel } };
+  const fetchedChannelIds = [];
+  const client = {
+    channels: {
+      fetch: async (channelId) => {
+        fetchedChannelIds.push(channelId);
+        return targetChannel;
+      },
+    },
+  };
   const onboarding = createOnboardingService(client);
 
   assert.equal(await onboarding.provision(), true);
   assert.equal(await onboarding.sendWelcome(member), true);
+  assert.deepEqual(fetchedChannelIds, [ONBOARDING_CHANNEL_ID]);
   assert.equal(createdChannels.length, 5);
   assert.equal(posted[0].payload.embeds[0].data.color, 0xf472b6);
   assert.deepEqual(posted[1], { emojiId: PINK_CHECK_EMOJI_ID, emojiName: "pinkcheck" });
@@ -296,6 +397,10 @@ test("startup creates one start guide and reuses it on later setup runs", async 
     type: ChannelType.GuildText,
     guildId: GUILD_ID,
     isTextBased: () => true,
+    setName: async function (name) {
+      this.name = name;
+      return this;
+    },
   };
   const { guild } = makeGuild({ channels: [startChannel] });
   startChannel.guild = guild;
@@ -367,6 +472,10 @@ test("an existing bot guide is reused without changing unrelated start messages"
     type: ChannelType.GuildText,
     guildId: GUILD_ID,
     isTextBased: () => true,
+    setName: async function (name) {
+      this.name = name;
+      return this;
+    },
   };
   const { guild } = makeGuild({ channels: [startChannel] });
   startChannel.guild = guild;
@@ -408,6 +517,7 @@ test("an existing bot guide is reused without changing unrelated start messages"
   );
 
   assert.equal(await onboarding.provision(), true);
+  assert.equal(startChannel.name, STYLED_CHANNEL_NAMES.start);
   assert.equal(edits, 1);
   assert.equal(sends, 0);
   assert.equal(unrelatedMessage.embeds.length, 0);
@@ -426,7 +536,13 @@ test("the onboarding service does not post in a different guild", async () => {
   };
   const client = { channels: { fetch: async () => targetChannel } };
   const onboarding = createOnboardingService(client);
+  const originalConsoleError = console.error;
+  console.error = () => {};
 
-  assert.equal(await onboarding.sendWelcome({ ...member, guild: { id: "941800000000000499" } }), false);
-  assert.equal(sends, 0);
+  try {
+    assert.equal(await onboarding.sendWelcome({ ...member, guild: { id: "941800000000000499" } }), false);
+    assert.equal(sends, 0);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
