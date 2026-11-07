@@ -37,10 +37,7 @@ export function buildMessageDeletionCommands() {
     buildSelfDeleteCommand("vip-delete", MESSAGE_DELETION_LIMITS.vip),
     new SlashCommandBuilder()
       .setName("mod-delete")
-      .setDescription(`Delete up to ${MESSAGE_DELETION_LIMITS.moderator} recent messages from a member`)
-      .addUserOption((option) =>
-        option.setName("member").setDescription("Member whose messages will be deleted").setRequired(true),
-      )
+      .setDescription(`Delete up to ${MESSAGE_DELETION_LIMITS.moderator} recent messages in this channel or from a member`)
       .addIntegerOption((option) =>
         option
           .setName("amount")
@@ -48,6 +45,11 @@ export function buildMessageDeletionCommands() {
           .setMinValue(1)
           .setMaxValue(MESSAGE_DELETION_LIMITS.moderator)
           .setRequired(true),
+      )
+      .addUserOption((option) =>
+        option
+          .setName("member")
+          .setDescription("Member whose messages will be deleted (leave blank for eligible messages from this channel)"),
       )
       .toJSON(),
   ];
@@ -64,6 +66,9 @@ function buildSelfDeleteCommand(name, max) {
         .setMinValue(1)
         .setMaxValue(max)
         .setRequired(true),
+    )
+    .addUserOption((option) =>
+      option.setName("member").setDescription("Optional member selection; only your own messages will be deleted"),
     )
     .toJSON();
 }
@@ -108,19 +113,25 @@ async function handleDeleteCommand(interaction, context) {
 
     let targetId = interaction.user.id;
     if (definition.kind === "moderator") {
-      const targetUser = interaction.options.getUser("member", true);
-      if (!targetUser || targetUser.bot) {
+      const targetUser = interaction.options.getUser("member", false);
+      if (targetUser?.bot) {
         throw new UserFacingError("Choose a human server member to moderate.");
       }
-      const targetMember = await fetchGuildMember(interaction.guild, targetUser.id);
-      validateModeratorTarget(targetMember, config);
-      targetId = targetUser.id;
+      if (targetUser) {
+        if (targetUser.id !== interaction.user.id) {
+          const targetMember = await fetchGuildMember(interaction.guild, targetUser.id);
+          validateModeratorTarget(targetMember, config);
+        }
+        targetId = targetUser.id;
+      } else {
+        targetId = null;
+      }
     }
 
     const scanLimit = Math.max(amount, MESSAGE_DELETION_LIMITS.scan);
     const messages = await collectMessages(interaction.channel, targetId, amount, scanLimit);
     if (!messages.length) {
-      return interaction.editReply("No eligible messages from that member were found in the recent message history.");
+      return interaction.editReply("No eligible messages were found in the recent channel history.");
     }
 
     if (messages.length > MESSAGE_DELETION_LIMITS.confirmationThreshold) {
@@ -137,7 +148,12 @@ async function handleDeleteCommand(interaction, context) {
         messages,
         createdAt: Date.now(),
       });
-      const targetText = definition.kind === "moderator" ? ` from <@${targetId}>` : " of your own";
+      const targetText =
+        definition.kind === "moderator"
+          ? targetId === null
+            ? " from this channel"
+            : ` from <@${targetId}>`
+          : " of your own";
       return interaction.editReply({
         content: `This will delete ${messages.length} eligible messages${targetText}. Confirm to continue; protected messages will be skipped.`,
         components: [confirmationRow(operationId)],
@@ -214,7 +230,11 @@ async function handleConfirmationButton(interaction, context) {
     const config = getGuildSettings(context.settings, interaction.guildId);
     validateRole(interaction.member, config, definition.roleField, operation.commandName);
     await requireBotDeletePermissions(interaction);
-    if (definition.kind === "moderator") {
+    if (
+      definition.kind === "moderator" &&
+      operation.targetId !== null &&
+      operation.targetId !== operation.actorId
+    ) {
       const targetMember = await fetchGuildMember(interaction.guild, operation.targetId);
       validateModeratorTarget(targetMember, config);
     }
@@ -359,7 +379,8 @@ function isEligibleMessage(message, targetId) {
   return Boolean(
     message &&
       !message.deleted &&
-      message.author?.id === targetId &&
+      typeof message.author?.id === "string" &&
+      (targetId === null || message.author.id === targetId) &&
       !message.author?.bot &&
       !message.webhookId &&
       !message.system &&
@@ -453,7 +474,7 @@ function confirmationRow(operationId) {
 }
 
 function formatResult(result, moderatorAction, targetId) {
-  const owner = moderatorAction ? `<@${targetId}>` : "your own";
+  const owner = moderatorAction ? (targetId === null ? "this channel" : `<@${targetId}>`) : "your own";
   const details = [`Deleted ${result.deletedCount} ${plural(result.deletedCount, "message")} from ${owner}.`];
   if (result.skippedCount) details.push(`${result.skippedCount} protected or unavailable ${plural(result.skippedCount, "message")} were skipped.`);
   if (result.failedCount) details.push(`${result.failedCount} ${plural(result.failedCount, "message")} could not be deleted; check the bot's permissions.`);

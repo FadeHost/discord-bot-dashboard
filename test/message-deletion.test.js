@@ -72,6 +72,7 @@ function makeHarness({
   memberRoleIds = [],
   targetRoleIds = [],
   targetId = TARGET_ID,
+  omitTargetUser = false,
   messages = [],
   config = {},
   canDelete = true,
@@ -134,7 +135,7 @@ function makeHarness({
     inGuild: () => true,
     options: {
       getInteger: () => amount,
-      getUser: () => ({ id: targetId, bot: false }),
+      getUser: () => (omitTargetUser ? null : { id: targetId, bot: false }),
     },
     deferReply: async (payload) => {
       interaction.deferred = true;
@@ -204,7 +205,11 @@ test("the three deletion commands register with bounded amounts", () => {
   assert.equal(commands[0].options[0].max_value, MESSAGE_DELETION_LIMITS.regular);
   assert.equal(commands[1].options[0].max_value, MESSAGE_DELETION_LIMITS.vip);
   assert.equal(commands[2].options.find((option) => option.name === "amount").max_value, MESSAGE_DELETION_LIMITS.moderator);
-  assert.ok(!commands[1].options.some((option) => option.name === "member"));
+  for (const command of commands) {
+    assert.equal(command.options.find((option) => option.name === "amount").required, true);
+    assert.notEqual(command.options.find((option) => option.name === "member").required, true);
+  }
+  assert.deepEqual(commands[2].options.map((option) => option.name), ["amount", "member"]);
 });
 
 test("command registration replaces only commands owned by this feature", () => {
@@ -215,7 +220,7 @@ test("command registration replaces only commands owned by this feature", () => 
   assert.deepEqual(merged, [{ name: "other" }, { name: "delete" }, { name: "vip-delete" }]);
 });
 
-test("/delete removes only the invoker's own eligible messages", async () => {
+test("/delete without a member removes only the invoker's own eligible messages", async () => {
   const own = makeMessage(1, ACTOR_ID);
   const other = makeMessage(2, OTHER_ID);
   const botSetup = makeMessage(3, BOT_ID, { author: { bot: true } });
@@ -226,6 +231,7 @@ test("/delete removes only the invoker's own eligible messages", async () => {
   const harness = makeHarness({
     commandName: "delete",
     amount: 20,
+    omitTargetUser: true,
     messages: [own, other, botSetup, pinned, systemMessage, controls, webhook],
   });
 
@@ -239,6 +245,17 @@ test("/delete removes only the invoker's own eligible messages", async () => {
   assert.equal(controls.deleted, false);
   assert.equal(webhook.deleted, false);
   assert.match(response(harness).content, /Deleted 1 message from your own/);
+});
+
+test("/delete ignores a selected member and still removes only the invoker's messages", async () => {
+  const own = makeMessage(1, ACTOR_ID);
+  const other = makeMessage(2, TARGET_ID);
+  const harness = makeHarness({ commandName: "delete", amount: 2, messages: [own, other] });
+
+  await handleMessageDeletionInteraction(harness.interaction, harness.context);
+
+  assert.deepEqual(harness.deletedIds, [own.id]);
+  assert.equal(other.deleted, false);
 });
 
 test("/vip-delete checks configured role IDs and remains self-only", async () => {
@@ -262,6 +279,24 @@ test("/vip-delete checks configured role IDs and remains self-only", async () =>
   assert.deepEqual(harness.deletedIds, [own.id]);
   assert.equal(other.deleted, false);
   assert.equal(targetOptionRead, false);
+});
+
+test("/vip-delete without a member removes only the VIP executor's messages", async () => {
+  const own = makeMessage(1, ACTOR_ID);
+  const other = makeMessage(2, TARGET_ID);
+  const harness = makeHarness({
+    commandName: "vip-delete",
+    amount: 2,
+    memberRoleIds: [VIP_ROLE_ID],
+    config: { vipRoleIds: [VIP_ROLE_ID] },
+    omitTargetUser: true,
+    messages: [own, other],
+  });
+
+  await handleMessageDeletionInteraction(harness.interaction, harness.context);
+
+  assert.deepEqual(harness.deletedIds, [own.id]);
+  assert.equal(other.deleted, false);
 });
 
 test("/vip-delete denies users without a configured matching role ID", async () => {
@@ -304,6 +339,47 @@ test("/mod-delete requires the configured moderator role and logs target deletio
   assert.doesNotMatch(JSON.stringify(harness.auditLog.entries[0]), /message content/i);
   assert.equal(shouldPubliclyLogDeletedMessage({ id: targetMessage.id, guild: {}, author: { bot: false } }, harness.auditLog), false);
   assert.equal(shouldPubliclyLogDeletedMessage({ id: unrelatedMessage.id, guild: {}, author: { bot: false } }, harness.auditLog), true);
+});
+
+test("/mod-delete without a member deletes eligible messages from any author in the channel", async () => {
+  const ownMessage = makeMessage(1, ACTOR_ID);
+  const otherMessage = makeMessage(2, TARGET_ID);
+  const thirdPartyMessage = makeMessage(3, OTHER_ID);
+  const botMessage = makeMessage(4, BOT_ID, { author: { bot: true } });
+  const pinnedMessage = makeMessage(5, OTHER_ID, { message: { pinned: true } });
+  const systemMessage = makeMessage(6, OTHER_ID, { message: { system: true } });
+  const controlsMessage = makeMessage(7, OTHER_ID, { message: { components: [{ type: 1 }] } });
+  const webhookMessage = makeMessage(8, OTHER_ID, { message: { webhookId: "941800000000000109" } });
+  const harness = makeHarness({
+    commandName: "mod-delete",
+    amount: 10,
+    memberRoleIds: [MOD_ROLE_ID],
+    config: { moderatorRoleIds: [MOD_ROLE_ID] },
+    omitTargetUser: true,
+    messages: [
+      ownMessage,
+      otherMessage,
+      thirdPartyMessage,
+      botMessage,
+      pinnedMessage,
+      systemMessage,
+      controlsMessage,
+      webhookMessage,
+    ],
+  });
+
+  await handleMessageDeletionInteraction(harness.interaction, harness.context);
+
+  assert.deepEqual(harness.deletedIds, [thirdPartyMessage.id, otherMessage.id, ownMessage.id]);
+  assert.equal(botMessage.deleted, false);
+  assert.equal(pinnedMessage.deleted, false);
+  assert.equal(systemMessage.deleted, false);
+  assert.equal(controlsMessage.deleted, false);
+  assert.equal(webhookMessage.deleted, false);
+  assert.equal(harness.auditLog.entries[0].selectedCount, 3);
+  assert.equal(harness.auditLog.entries[0].targetId, null);
+  assert.equal(shouldPubliclyLogDeletedMessage({ id: thirdPartyMessage.id, guild: {}, author: { bot: false } }, harness.auditLog), false);
+  assert.match(response(harness).content, /from this channel/);
 });
 
 test("/mod-delete does not authorize by role name and rejects unauthorized users", async () => {
@@ -374,6 +450,27 @@ test("VIP role is rechecked when a large deletion is confirmed", async () => {
 
   assert.deepEqual(harness.deletedIds, []);
   assert.match(confirmation.events.at(-1).payload.content, /authorized VIP role/);
+});
+
+test("/mod-delete confirms channel-wide deletion when member is omitted", async () => {
+  const messages = Array.from({ length: 11 }, (_, index) => makeMessage(index + 1, index % 2 ? ACTOR_ID : TARGET_ID));
+  const harness = makeHarness({
+    commandName: "mod-delete",
+    amount: 11,
+    memberRoleIds: [MOD_ROLE_ID],
+    config: { moderatorRoleIds: [MOD_ROLE_ID] },
+    omitTargetUser: true,
+    messages,
+  });
+  await handleMessageDeletionInteraction(harness.interaction, harness.context);
+  const customId = response(harness).components[0].components[0].data.custom_id;
+
+  const confirmation = makeConfirmation(harness, customId, { roleIds: [MOD_ROLE_ID] });
+  await handleMessageDeletionInteraction(confirmation.interaction, harness.context);
+
+  assert.equal(harness.deletedIds.length, 11);
+  assert.match(confirmation.events.at(-1).payload.content, /Deleted 11 messages from this channel/);
+  assert.equal(harness.auditLog.entries[0].targetId, null);
 });
 
 test("cancelled large deletions do not delete anything", async () => {

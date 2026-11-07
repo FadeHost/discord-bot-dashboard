@@ -74,3 +74,20 @@ test("moderation entries reject invalid IDs and invalid count shapes", () => {
   assert.throws(() => store.begin(entry({ selectedCount: 101 })), /invalid structure/);
   assert.deepEqual(store.list(), []);
 });
+
+test("channel-wide moderation records preserve a null target", () => {
+  const dir = tempDir();
+  const store = new ModerationLogStore(dir);
+  store.begin(entry({ targetId: null }));
+
+  const afterRestart = new ModerationLogStore(dir);
+  assert.equal(afterRestart.list()[0].targetId, null);
+  afterRestart.finish(ENTRY_ID, {
+    status: "completed",
+    deletedCount: 1,
+    skippedCount: 0,
+    failedCount: 0,
+    messageIds: [MESSAGE_ID],
+  });
+  assert.equal(afterRestart.list()[0].targetId, null);
+});

@@ -114,7 +114,7 @@ function normalizeEntry(input = {}) {
     guildId: String(input.guildId ?? ""),
     channelId: String(input.channelId ?? ""),
     actorId: String(input.actorId ?? ""),
-    targetId: String(input.targetId ?? ""),
+    targetId: input.targetId === null ? null : String(input.targetId ?? ""),
     requestedCount: input.requestedCount,
     selectedCount: input.selectedCount,
     messageIds: input.messageIds,
@@ -137,7 +137,7 @@ function isValidEntry(entry) {
     SNOWFLAKE.test(entry.guildId) &&
     SNOWFLAKE.test(entry.channelId) &&
     SNOWFLAKE.test(entry.actorId) &&
-    SNOWFLAKE.test(entry.targetId) &&
+    (entry.targetId === null || SNOWFLAKE.test(entry.targetId)) &&
     isCount(entry.requestedCount) &&
     isCount(entry.selectedCount) &&
     entry.selectedCount <= entry.requestedCount &&
