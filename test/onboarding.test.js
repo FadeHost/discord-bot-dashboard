@@ -1,0 +1,283 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { ChannelType, Collection } from "discord.js";
+
+import {
+  buildOnboardingWelcomePayload,
+  completeOnboardingVerification,
+  createOnboardingService,
+  ensureOnboardingChannels,
+  handleOnboardingReaction,
+  ONBOARDING_CHANNEL_ID,
+  ONBOARDING_FOOTER,
+  PINK_CHECK_EMOJI,
+  PINK_CHECK_EMOJI_ID,
+} from "../src/onboarding.js";
+
+const GUILD_ID = "941800000000000410";
+const MEMBER_ID = "941800000000000411";
+const NEW_ROLE_ID = "941800000000000412";
+const MEMBER_ROLE_ID = "941800000000000413";
+const BOT_ID = "941800000000000414";
+
+function makeGuild({ channels = [], roles = [], memberRoleIds = [NEW_ROLE_ID], addError = null, removeError = null } = {}) {
+  const createdChannels = [];
+  const channelCache = new Collection(channels.map((channel) => [channel.id, channel]));
+  let nextChannelId = 500;
+  const guild = {
+    id: GUILD_ID,
+    name: "Sugar Server",
+    channels: {
+      cache: channelCache,
+      fetch: async () => channelCache,
+      create: async (options) => {
+        const channel = {
+          id: String(nextChannelId++),
+          name: options.name,
+          type: options.type,
+        };
+        createdChannels.push({ options, channel });
+        channelCache.set(channel.id, channel);
+        return channel;
+      },
+    },
+    roles: {
+      cache: new Collection(roles.map((role) => [role.id, role])),
+      fetch: async () => new Collection(roles.map((role) => [role.id, role])),
+    },
+    emojis: {
+      cache: new Collection([[PINK_CHECK_EMOJI_ID, { id: PINK_CHECK_EMOJI_ID, name: "pinkcheck" }]]),
+      fetch: async (id) => ({ id, name: "pinkcheck" }),
+    },
+    members: {
+      fetch: async () => member,
+    },
+  };
+
+  const memberRoleCache = new Collection(memberRoleIds.map((id) => [id, { id }]));
+  const calls = [];
+  const member = {
+    id: MEMBER_ID,
+    guild,
+    roles: {
+      cache: memberRoleCache,
+      add: async (role, reason) => {
+        calls.push({ action: "add", role, reason });
+        if (addError) throw addError;
+        memberRoleCache.set(role.id, role);
+      },
+      remove: async (role, reason) => {
+        calls.push({ action: "remove", role, reason });
+        if (removeError) throw removeError;
+        memberRoleCache.delete(role.id);
+      },
+    },
+  };
+
+  return { guild, member, createdChannels, calls };
+}
+
+function onboardingRoles() {
+  return [
+    { id: NEW_ROLE_ID, name: "new" },
+    { id: MEMBER_ROLE_ID, name: "member" },
+  ];
+}
+
+test("onboarding setup creates missing channels and uses an announcement channel for news", async () => {
+  const { guild, createdChannels } = makeGuild();
+
+  const channels = await ensureOnboardingChannels(guild);
+
+  assert.deepEqual([...channels.keys()], ["rules", "help", "start", "guide", "news"]);
+  assert.equal(createdChannels.length, 5);
+  assert.equal(createdChannels.find(({ options }) => options.name === "news").options.type, ChannelType.GuildAnnouncement);
+});
+
+test("news falls back to a text channel when Discord rejects announcement-channel creation", async () => {
+  const { guild } = makeGuild();
+  const createChannel = guild.channels.create;
+  const attempts = [];
+  guild.channels.create = async (options) => {
+    attempts.push(options);
+    if (options.name === "news" && options.type === ChannelType.GuildAnnouncement) {
+      throw Object.assign(new Error("announcement channels unavailable"), { code: 50035 });
+    }
+    return createChannel(options);
+  };
+  const originalConsoleWarn = console.warn;
+  console.warn = () => {};
+
+  let channels;
+  try {
+    channels = await ensureOnboardingChannels(guild);
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.deepEqual(
+    attempts.filter((options) => options.name === "news").map((options) => options.type),
+    [ChannelType.GuildAnnouncement, ChannelType.GuildText],
+  );
+  assert.equal(channels.get("news").type, ChannelType.GuildText);
+});
+
+test("existing text channels are reused without changing them", async () => {
+  const existing = ["rules", "help", "start", "guide", "news"].map((name, index) => ({
+    id: String(600 + index),
+    name,
+    type: ChannelType.GuildText,
+  }));
+  const { guild, createdChannels } = makeGuild({ channels: existing });
+
+  const channels = await ensureOnboardingChannels(guild);
+
+  assert.equal(createdChannels.length, 0);
+  assert.equal(channels.get("news"), existing[4]);
+});
+
+test("a same-name non-text channel is preserved instead of creating a duplicate", async () => {
+  const voiceRules = { id: "650", name: "rules", type: ChannelType.GuildVoice };
+  const { guild, createdChannels } = makeGuild({ channels: [voiceRules] });
+  const originalConsoleWarn = console.warn;
+  console.warn = () => {};
+
+  let channels;
+  try {
+    channels = await ensureOnboardingChannels(guild);
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+
+  assert.equal(channels.has("rules"), false);
+  assert.equal(createdChannels.some(({ options }) => options.name === "rules"), false);
+});
+
+test("welcome embed uses the private-chat style and mentions each onboarding channel", () => {
+  const channels = new Map(["rules", "help", "start", "guide", "news"].map((name, index) => [
+    name,
+    { id: String(700 + index) },
+  ]));
+
+  const payload = buildOnboardingWelcomePayload({
+    guildName: "Sugar Server",
+    memberId: MEMBER_ID,
+    channels,
+  });
+  const embed = payload.embeds[0].toJSON();
+
+  assert.equal(embed.color, 0xf472b6);
+  assert.match(embed.title, /🎀$/u);
+  assert.match(embed.description, new RegExp(PINK_CHECK_EMOJI));
+  assert.match(embed.description, /remove the `new` role and add the `member` role/);
+  assert.deepEqual(payload.allowedMentions, { parse: [], users: [MEMBER_ID] });
+  for (const channel of channels.values()) assert.ok(embed.fields.some((field) => field.value.includes(`<#${channel.id}>`)));
+  assert.equal(embed.footer.text, ONBOARDING_FOOTER);
+});
+
+test("verification adds member before removing new", async () => {
+  const { guild, calls, member } = makeGuild({ roles: onboardingRoles() });
+  guild.members.fetch = async () => member;
+
+  assert.equal(await completeOnboardingVerification(guild, MEMBER_ID), true);
+  assert.deepEqual(calls.map(({ action }) => action), ["add", "remove"]);
+  assert.equal(member.roles.cache.has(MEMBER_ROLE_ID), true);
+  assert.equal(member.roles.cache.has(NEW_ROLE_ID), false);
+});
+
+test("verification does not remove new if adding member fails", async () => {
+  const { guild, calls, member } = makeGuild({
+    roles: onboardingRoles(),
+    addError: Object.assign(new Error("missing permission"), { code: 50013 }),
+  });
+  guild.members.fetch = async () => member;
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    assert.equal(await completeOnboardingVerification(guild, MEMBER_ID), false);
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.deepEqual(calls.map(({ action }) => action), ["add"]);
+  assert.equal(member.roles.cache.has(NEW_ROLE_ID), true);
+});
+
+test("verification ignores members who do not have the new role", async () => {
+  const { guild, calls, member } = makeGuild({
+    roles: onboardingRoles(),
+    memberRoleIds: [],
+  });
+  guild.members.fetch = async () => member;
+
+  assert.equal(await completeOnboardingVerification(guild, MEMBER_ID), false);
+  assert.deepEqual(calls, []);
+});
+
+test("only the pink check reaction on Sugar's onboarding embed changes roles", async () => {
+  const { guild, member, calls } = makeGuild({ roles: onboardingRoles() });
+  guild.members.fetch = async () => member;
+  const client = { user: { id: BOT_ID } };
+  const message = {
+    author: { id: BOT_ID },
+    channelId: ONBOARDING_CHANNEL_ID,
+    content: `Welcome <@${MEMBER_ID}>!`,
+    guild,
+    embeds: [{ footer: { text: ONBOARDING_FOOTER } }],
+  };
+  const reaction = {
+    emoji: { id: PINK_CHECK_EMOJI_ID },
+    message,
+  };
+
+  assert.equal(await handleOnboardingReaction(client, reaction, { id: MEMBER_ID, bot: false }), true);
+  assert.deepEqual(calls.map(({ action }) => action), ["add", "remove"]);
+  assert.equal(await handleOnboardingReaction(client, { ...reaction, emoji: { id: "other" } }, { id: MEMBER_ID }), false);
+  assert.equal(await handleOnboardingReaction(client, reaction, { id: MEMBER_ID, bot: true }), false);
+  assert.equal(await handleOnboardingReaction(client, reaction, { id: "941800000000000415" }), false);
+});
+
+test("the onboarding service provisions the target guild and reacts to each new welcome", async () => {
+  const { guild, member, createdChannels } = makeGuild({ roles: onboardingRoles() });
+  const posted = [];
+  const targetChannel = {
+    guild,
+    guildId: GUILD_ID,
+    isTextBased: () => true,
+    send: async (payload) => {
+      const message = {
+        payload,
+        react: async (emoji) => posted.push({ emojiId: emoji.id, emojiName: emoji.name }),
+      };
+      posted.push({ payload });
+      return message;
+    },
+  };
+  const client = { channels: { fetch: async () => targetChannel } };
+  const onboarding = createOnboardingService(client);
+
+  assert.equal(await onboarding.provision(), true);
+  assert.equal(await onboarding.sendWelcome(member), true);
+  assert.equal(createdChannels.length, 5);
+  assert.equal(posted[0].payload.embeds[0].data.color, 0xf472b6);
+  assert.deepEqual(posted[1], { emojiId: PINK_CHECK_EMOJI_ID, emojiName: "pinkcheck" });
+});
+
+test("the onboarding service does not post in a different guild", async () => {
+  const { guild, member } = makeGuild();
+  let sends = 0;
+  const targetChannel = {
+    guild,
+    guildId: GUILD_ID,
+    isTextBased: () => true,
+    send: async () => {
+      sends += 1;
+    },
+  };
+  const client = { channels: { fetch: async () => targetChannel } };
+  const onboarding = createOnboardingService(client);
+
+  assert.equal(await onboarding.sendWelcome({ ...member, guild: { id: "941800000000000499" } }), false);
+  assert.equal(sends, 0);
+});
