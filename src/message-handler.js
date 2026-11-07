@@ -57,7 +57,7 @@ async function referencesBotMessage(message, botUserId) {
   } catch { return false; }
 }
 
-function buildMemberContext(member, user) {
+export function buildMemberContext(member, user) {
   return {
     username: user?.username ?? "",
     displayName: member?.displayName ?? user?.globalName ?? user?.username ?? "",
