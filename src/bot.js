@@ -58,6 +58,7 @@ export function createBot({ token, applicationId, settings, generateReply, memor
   }
 
   client.on(Events.GuildMemberAdd, async (member) => {
+    await assignNewMemberRole(member);
     const config = settings.get(member.guild.id);
 
     if (config.welcomeChannelId) {
@@ -159,6 +160,36 @@ export function createBot({ token, applicationId, settings, generateReply, memor
   });
 
   return client;
+}
+
+export async function assignNewMemberRole(member) {
+  const guildId = member?.guild?.id ?? "unknown";
+
+  try {
+    let roles = member.guild.roles.cache;
+    let newRole = [...roles.values()].find((role) => role.name === "new");
+    if (!newRole && typeof member.guild.roles.fetch === "function") {
+      roles = await member.guild.roles.fetch();
+      newRole = [...roles.values()].find((role) => role.name === "new");
+    }
+    if (!newRole) {
+      console.error(`[bot] the role "new" was not found in guild ${guildId}`);
+      return false;
+    }
+    if (member.roles.cache.has(newRole.id)) return true;
+
+    await member.roles.add(newRole, "Automatically assign the new role to new members");
+    return true;
+  } catch (error) {
+    if (String(error?.code) === "50013") {
+      console.error(
+        `[bot] could not assign the role "new" in guild ${guildId}: check Manage Roles permission and role hierarchy`,
+      );
+    } else {
+      console.error(`[bot] could not assign the role "new" in guild ${guildId} (${error?.code ?? "unknown error"})`);
+    }
+    return false;
+  }
 }
 
 export function shouldPubliclyLogDeletedMessage(message, moderationLogs) {
