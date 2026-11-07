@@ -101,6 +101,11 @@ or a mounted `/data` directory. Node 20 or newer.
 | `{server}` | your server's name |
 | `{count}` | how many members there are now |
 
+Sugar also posts a separate AI-personalized welcome in channel
+`1567093021298794658` when someone joins the server that owns that channel. It
+uses their display name, server roles, account creation date and server join
+date as limited context, and only pings the new member.
+
 ## Who can change things
 
 The login asks Discord for two things: who you are, and which servers you are

@@ -10,6 +10,7 @@ import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { attachMessageDeletionSystem } from "./message-deletion.js";
 import { attachPrivateChatSystem } from "./private-chat-system.js";
 import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
+import { createProfileWelcome, PROFILE_WELCOME_CHANNEL_ID } from "./profile-welcome.js";
 import { renderWelcome } from "./settings.js";
 
 const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf87171 };
@@ -76,6 +77,8 @@ export function createBot({ token, applicationId, settings, generateReply, memor
       description: `<@${member.id}> (${member.user.tag})`,
       footer: `${member.guild.memberCount} members`,
     });
+
+    await sendProfileWelcome(client, member, generateReply);
   });
 
   client.on(Events.GuildMemberRemove, async (member) => {
@@ -196,6 +199,19 @@ async function send(client, channelId, payload) {
   } catch (error) {
     // A deleted channel or a missing permission must not take the bot down.
     console.error(`[bot] could not post in ${channelId}: ${error.message}`);
+  }
+}
+
+export async function sendProfileWelcome(client, member, generateReply) {
+  try {
+    const channel = await client.channels.fetch(PROFILE_WELCOME_CHANNEL_ID);
+    if (!channel?.isTextBased() || channel.guildId !== member.guild.id) return false;
+
+    await channel.send(await createProfileWelcome(member, generateReply));
+    return true;
+  } catch (error) {
+    console.error(`[bot] could not post profile welcome in ${PROFILE_WELCOME_CHANNEL_ID}: ${error.message}`);
+    return false;
   }
 }
 
