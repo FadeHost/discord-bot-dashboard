@@ -61,10 +61,9 @@ including decorative Unicode lettering.
 
 The channel owner can add or remove invitees and rename the chat. Invitees can
 leave. Deletion requires an owner confirmation and permanently removes the
-channel and its messages. Each channel is private to its owner and invitees
-through Discord permission overwrites; server administrators with the
-**Administrator** permission can still access it. Chat ownership and invitees
-are stored in `private-chats.json` under the persistent `DATA_DIR`.
+channel and its messages. Access for each channel is managed through Discord
+permission overwrites. Chat ownership and invitees are stored in
+`private-chats.json` under the persistent `DATA_DIR`.
 
 The bot needs permission to create and manage channels in the target server.
 On startup it posts and pins one guide in the lobby, and keeps unrelated
