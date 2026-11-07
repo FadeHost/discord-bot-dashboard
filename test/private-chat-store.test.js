@@ -179,7 +179,7 @@ test("private-chat creation builders make separate, styled welcome and command e
   assert.equal(welcome.embeds[0].data.title, `${toRoyalBold("Private Chat Created")} 🎀`);
   assert.equal(
     welcome.embeds[0].data.description,
-    `${toRoyalBold("Your private chat is ready!")}\n\nWelcome <@323456789012345678>, <@423456789012345678> and <@523456789012345678>.`,
+    "Your private chat is ready!\n\nWelcome <@323456789012345678>, <@423456789012345678> and <@523456789012345678>.",
   );
   assert.deepEqual(welcome.allowedMentions, {
     parse: [],
@@ -197,7 +197,8 @@ test("private-chat creation builders make separate, styled welcome and command e
       "private-chat:clear-history",
     ],
   );
-  assert.equal(welcome.components[1].components[0].data.label, "Instructions");
+  assert.equal(welcome.components[1].components[0].data.custom_id, "private-chat:commands");
+  assert.equal(welcome.components[1].components[0].data.label, "Commands");
   assert.equal(guide.embeds[0].data.title, `${toRoyalBold("Private Chat Commands")} 🎀`);
   assert.equal(guide.embeds[0].data.description, "Use these commands inside this private channel");
   assert.doesNotMatch(guide.embeds[0].data.description, new RegExp(toRoyalBold("Use these commands inside this private channel")));

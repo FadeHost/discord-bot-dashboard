@@ -297,7 +297,7 @@ export function buildPrivateChatWelcomePayload(ownerId, invitees = []) {
   const embed = new EmbedBuilder()
     .setColor(0xf472b6)
     .setTitle(formatEmbedTitle("Private Chat Created"))
-    .setDescription(`${toRoyalBold("Your private chat is ready!")}\n\n${welcome}`);
+    .setDescription(`Your private chat is ready!\n\n${welcome}`);
 
   const firstRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PREFIX}add`).setLabel("Add people").setStyle(ButtonStyle.Primary),
@@ -307,7 +307,7 @@ export function buildPrivateChatWelcomePayload(ownerId, invitees = []) {
     new ButtonBuilder().setCustomId(`${PREFIX}delete`).setLabel("Delete chat").setStyle(ButtonStyle.Danger),
   );
   const secondRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Instructions").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Commands").setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`${PREFIX}clear-history`).setLabel("Clear History").setStyle(ButtonStyle.Danger),
   );
   return {
