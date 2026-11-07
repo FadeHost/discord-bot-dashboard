@@ -74,6 +74,12 @@ function makeInteraction(
 test("private-chat buttons route to their existing controls", async () => {
   const context = { client: {}, store: {}, lobbyChannelId: "923456789012345678" };
 
+  const create = makeInteraction("create");
+  create.interaction.channelId = context.lobbyChannelId;
+  await handlePrivateChatInteraction(create.interaction, context);
+  assert.equal(create.events[0].type, "modal");
+  assert.equal(create.events[0].modal.data.custom_id, "private-chat:create-modal");
+
   const commands = makeInteraction("commands");
   await handlePrivateChatInteraction(commands.interaction, context);
   assert.equal(commands.events[0].type, "reply");

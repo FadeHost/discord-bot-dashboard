@@ -152,7 +152,7 @@ test("the lobby creation guide keeps its buttons and uses the 👤 name example"
   assert.doesNotMatch(description, new RegExp(toRoyalBold("Create a private chat")));
   assert.match(description, /• Use a button to create a private chat/u);
   assert.ok(
-    description.includes("Instructions inside the chat are available from the **Instructions** button or `/priv-chat commands`."),
+    description.includes("Instructions inside the chat are available from the **Commands** button or `/priv-chat commands`."),
   );
   assert.doesNotMatch(description, /administrators?/iu);
   assert.match(description, new RegExp(toRoyalBold("Name format")));
@@ -163,7 +163,7 @@ test("the lobby creation guide keeps its buttons and uses the 👤 name example"
   );
   assert.deepEqual(
     payload.components[0].components.map((button) => button.data.label),
-    ["Create private chat", "Instructions"],
+    ["Create private chat", "Commands"],
   );
 });
 

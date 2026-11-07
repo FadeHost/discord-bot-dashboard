@@ -275,13 +275,13 @@ export function buildPrivateChatLobbyGuidePayload() {
         toRoyalBold("Name format"),
         "`👤｜9e—your-text—9e°♡`",
         "",
-        "Instructions inside the chat are available from the **Instructions** button or `/priv-chat commands`.",
+        "Instructions inside the chat are available from the **Commands** button or `/priv-chat commands`.",
       ].join("\n"),
     );
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`${PREFIX}create`).setLabel("Create private chat").setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Instructions").setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`${PREFIX}commands`).setLabel("Commands").setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [buttons] };
 }
