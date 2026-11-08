@@ -9,6 +9,7 @@ import { resolveDeploymentVersion } from "./src/deployment-version.js";
 import { SettingsStore, resolveDataDir } from "./src/settings.js";
 import { MemoryStore } from "./src/memory.js";
 import { PrivateChatStore } from "./src/private-chat-store.js";
+import { SelfRoleStore } from "./src/self-role-store.js";
 import { ModerationLogStore } from "./src/moderation-log-store.js";
 import { OnboardingGuideStore } from "./src/onboarding-guide-store.js";
 import { createWeb } from "./src/web.js";
@@ -48,6 +49,7 @@ let dataDir;
 let settings;
 let memory;
 let privateChats;
+let selfRoles;
 let moderationLogs;
 let onboardingGuides;
 try {
@@ -55,6 +57,7 @@ try {
   settings = new SettingsStore(dataDir, { allowMissing: process.env.NODE_ENV === "development" });
   memory = new MemoryStore(dataDir);
   privateChats = new PrivateChatStore(dataDir);
+  selfRoles = new SelfRoleStore(dataDir);
   moderationLogs = new ModerationLogStore(dataDir);
   onboardingGuides = new OnboardingGuideStore(dataDir);
 } catch (error) {
@@ -74,6 +77,7 @@ const client = createBot({
   generateReply,
   memory,
   privateChats,
+  selfRoles,
   moderationLogs,
   onboardingGuides,
 });

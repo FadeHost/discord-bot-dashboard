@@ -138,12 +138,25 @@ startup stops without rewriting it; repair it or restore it from a backup.
 
 The app currently has no database. Its durable application data is
 `settings.json`, `memory.json`, `private-chats.json`, `moderation-logs.json`,
-and `onboarding-guide.json` under `DATA_DIR`.
+`onboarding-guide.json`, and `self-roles.json` under `DATA_DIR`.
 Point `DATA_DIR` at a persistent disk or mounted directory on the host. Outside
 `NODE_ENV=development`, the app only uses an existing `DATA_DIR` or `/data` and
 stops if that storage is unavailable; it never switches to `./data`. Local
 development may fall back to `./data`. A writable path is not necessarily
 persistent, so confirm the chosen disk survives host restarts and redeploys.
+
+## Self-role picker
+
+On startup, the bot provisions the styled self-role channel and approved roles
+only in the server containing the configured onboarding welcome channel. The
+panel reuses its saved bot-owned message. The `𝓢𝓽𝓪𝓯𝓯` role has no server-wide
+permissions and is not self-assignable; a server administrator must assign it
+to trusted reviewers before using the private review flow.
+
+Under 18 is a member's self-declaration, not age verification. Selecting it
+opens a private ticket and does not automatically jail or punish anyone.
+Self-role channel, role, and ticket metadata are kept in `self-roles.json`;
+corrupt data stops startup instead of being overwritten.
 
 GitHub `main` stores the source history. To make a portable snapshot of the
 project files and current data, run this from the project directory:
@@ -167,8 +180,9 @@ bash scripts/backup.sh /data/sugar-backups
 ```
 
 The backup includes the project files needed to run the app and each of
-`DATA_DIR/settings.json`, `DATA_DIR/memory.json`, and
-`DATA_DIR/private-chats.json` when present. Missing data files are not created
+`DATA_DIR/settings.json`, `DATA_DIR/memory.json`, `DATA_DIR/private-chats.json`,
+`DATA_DIR/moderation-logs.json`, `DATA_DIR/onboarding-guide.json`, and
+`DATA_DIR/self-roles.json` when present. Missing data files are not created
 or added as empty files. The restore script extracts every archived file,
 including these data files, into a new directory; it does not write to `DATA_DIR`
 or modify the live installation. It refuses to extract into an existing

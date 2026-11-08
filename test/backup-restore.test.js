@@ -16,6 +16,7 @@ function createFixture(
     includePrivateChats = true,
     includeModerationLogs = true,
     includeOnboardingGuide = true,
+    includeSelfRoles = true,
   } = {},
 ) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "sugar-backup-test-"));
@@ -64,6 +65,7 @@ function createFixture(
   const privateChatsFile = path.join(dataDir, "private-chats.json");
   const moderationLogsFile = path.join(dataDir, "moderation-logs.json");
   const onboardingGuideFile = path.join(dataDir, "onboarding-guide.json");
+  const selfRolesFile = path.join(dataDir, "self-roles.json");
   if (includeSettings) {
     fs.writeFileSync(
       settingsFile,
@@ -140,6 +142,23 @@ function createFixture(
       JSON.stringify({ version: 1, messageIds: { "941800000000000004": "941800000000000007" } }),
     );
   }
+  if (includeSelfRoles) {
+    fs.writeFileSync(
+      selfRolesFile,
+      JSON.stringify({
+        version: 1,
+        guilds: {
+          "941800000000000001": {
+            channelId: null,
+            messageId: null,
+            staffRoleId: null,
+            roleIds: {},
+            tickets: {},
+          },
+        },
+      }),
+    );
+  }
 
   return {
     base,
@@ -150,6 +169,7 @@ function createFixture(
     privateChatsFile,
     moderationLogsFile,
     onboardingGuideFile,
+    selfRolesFile,
   };
 }
 
@@ -193,6 +213,7 @@ test("FadeHost-style backup and restore preserve app data and code without inclu
   assert.ok(entries.includes("./data/private-chats.json"));
   assert.ok(entries.includes("./data/moderation-logs.json"));
   assert.ok(entries.includes("./data/onboarding-guide.json"));
+  assert.ok(entries.includes("./data/self-roles.json"));
   assert.ok(entries.includes("./.env.example"));
   assert.ok(
     !entries.some(
@@ -228,6 +249,10 @@ test("FadeHost-style backup and restore preserve app data and code without inclu
   assert.equal(
     fs.readFileSync(path.join(restoreDir, "data", "onboarding-guide.json"), "utf8"),
     fs.readFileSync(fixture.onboardingGuideFile, "utf8"),
+  );
+  assert.equal(
+    fs.readFileSync(path.join(restoreDir, "data", "self-roles.json"), "utf8"),
+    fs.readFileSync(fixture.selfRolesFile, "utf8"),
   );
   assert.equal(fs.readFileSync(path.join(restoreDir, "index.js"), "utf8"), "export const fixture = true;\n");
   assert.equal(fs.existsSync(path.join(restoreDir, ".env")), false);
