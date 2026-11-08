@@ -5,9 +5,12 @@ import {
   ChannelType,
   EmbedBuilder,
   Events,
+  ModalBuilder,
   PermissionFlagsBits,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  TextInputBuilder,
+  TextInputStyle,
 } from "discord.js";
 
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
@@ -21,7 +24,7 @@ import {
   getSelfRoleCategory,
   getSelfRoleDefinition,
 } from "./self-role-catalog.js";
-import { provisionSelfRoleGuild } from "./self-role-provisioning.js";
+import { MAX_GUILD_ROLES, provisionSelfRoleGuild } from "./self-role-provisioning.js";
 
 const MEMBER_ROLE_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
@@ -114,6 +117,7 @@ export async function provisionGuild(guild, client, store) {
 export function buildSelfRoleSelectionRow(categoryKey, roleIds, member) {
   const category = getSelfRoleCategory(categoryKey);
   if (!category) throw new Error("That self-role category is not available.");
+  if (!category.options.length) throw new Error("Role choices for this category are waiting for approval.");
 
   let hasSingleDefault = false;
   const options = category.options.map((option) => {
@@ -207,6 +211,16 @@ export async function handleSelfRoleInteraction(interaction, { client, store }) 
     if (interaction.customId === `${SELF_ROLE_PREFIX}ticket-close`) {
       return closeReviewTicket(interaction, { client, store });
     }
+    if (interaction.customId === `${SELF_ROLE_PREFIX}color:set`) {
+      const config = store.getGuild(interaction.guildId);
+      if (!isActiveColorControl(interaction, config)) {
+        return replyEphemeral(interaction, "This color control is no longer active.");
+      }
+      return interaction.showModal(buildColorCustomizationModal());
+    }
+    if (interaction.customId === `${SELF_ROLE_PREFIX}color:remove`) {
+      return removeMemberColor(interaction, { store });
+    }
     const match = interaction.customId.match(/^self-role:open:([a-z-]+)$/u);
     if (match) return openCategoryPicker(interaction, { client, store }, match[1]);
     return replyEphemeral(interaction, "That self-role control is not available.");
@@ -216,13 +230,19 @@ export async function handleSelfRoleInteraction(interaction, { client, store }) 
     const match = interaction.customId.match(/^self-role:select:([a-z-]+)$/u);
     if (match) return submitCategorySelection(interaction, { client, store }, match[1]);
   }
+  if (
+    interaction.isModalSubmit?.() &&
+    interaction.customId === `${SELF_ROLE_PREFIX}color:submit`
+  ) {
+    return setMemberColor(interaction, { store });
+  }
 
   return replyEphemeral(interaction, "That self-role control is not available.");
 }
 
 export function isSelfRoleInteraction(interaction) {
   return Boolean(
-    (interaction.isButton?.() || interaction.isStringSelectMenu?.()) &&
+    (interaction.isButton?.() || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.()) &&
       typeof interaction.customId === "string" &&
       interaction.customId.startsWith(SELF_ROLE_PREFIX),
   );
@@ -231,6 +251,7 @@ export function isSelfRoleInteraction(interaction) {
 export async function applySelfRoleSelection(member, guild, store, categoryKey, selectedValues) {
   const category = getSelfRoleCategory(categoryKey);
   if (!category) throw new Error("That self-role category is not available.");
+  if (!category.options.length) throw new Error("Role choices for this category are waiting for approval.");
   const selectedKeys = validateSelfRoleSelection(category, selectedValues);
   const guildConfig = store.getGuild(guild.id);
   const currentRoleIds = guildConfig.roleIds;
@@ -372,12 +393,23 @@ async function openCategoryPicker(interaction, { client, store }, categoryKey) {
   const category = getSelfRoleCategory(categoryKey);
   if (!category) return replyEphemeral(interaction, "That self-role category is not available.");
   const config = store.getGuild(interaction.guildId);
-  if (
-    interaction.channelId !== config.channelId ||
-    interaction.message?.id !== config.messageId ||
-    interaction.message?.author?.id !== client.user?.id
-  ) {
+  if (!isActiveSelfRolePanel(interaction, config, client)) {
     return replyEphemeral(interaction, "This self-role panel is no longer active.");
+  }
+
+  if (category.key === "color") {
+    return interaction.reply({
+      content: `${toRoyalBold("Color")} — set a custom hex color for your own permissionless role, or remove your color role.`,
+      components: [buildColorCustomizationRow()],
+      ephemeral: true,
+      allowedMentions: { parse: [] },
+    });
+  }
+  if (!category.options.length) {
+    return replyEphemeral(
+      interaction,
+      `${toRoyalBold(category.label)} role options are waiting for your approval. No roles are available in this category yet.`,
+    );
   }
 
   try {
@@ -418,6 +450,189 @@ async function submitCategorySelection(interaction, { client, store }, categoryK
     return interaction.editReply({ content: response, components: [] });
   } catch (error) {
     return interaction.editReply({ content: safeErrorMessage(error), components: [] });
+  }
+}
+
+export function buildColorCustomizationRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`${SELF_ROLE_PREFIX}color:set`)
+      .setLabel(toRoyalBold("Set custom color"))
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId(`${SELF_ROLE_PREFIX}color:remove`)
+      .setLabel(toRoyalBold("Remove my color"))
+      .setStyle(ButtonStyle.Secondary),
+  );
+}
+
+export function buildColorCustomizationModal() {
+  const input = new TextInputBuilder()
+    .setCustomId("hex")
+    .setLabel("Hex color")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("#EFAAC9")
+    .setMaxLength(7)
+    .setRequired(true);
+
+  return new ModalBuilder()
+    .setCustomId(`${SELF_ROLE_PREFIX}color:submit`)
+    .setTitle(toRoyalBold("Customize your color"))
+    .addComponents(new ActionRowBuilder().addComponents(input));
+}
+
+export function parseCustomRoleColor(value) {
+  const hex = String(value ?? "").trim();
+  if (!/^#[\da-f]{6}$/iu.test(hex)) throw new Error("Enter a valid six-digit hex color, such as #EFAAC9.");
+  return Number.parseInt(hex.slice(1), 16);
+}
+
+async function setMemberColor(interaction, { store }) {
+  if (!isValidColorInteraction(interaction, store)) {
+    return replyEphemeral(interaction, "This color control is no longer active.");
+  }
+  const colorValue = interaction.fields.getTextInputValue("hex");
+  let color;
+  try {
+    color = parseCustomRoleColor(colorValue);
+  } catch (error) {
+    return replyEphemeral(interaction, error.message);
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  const member = await resolveGuildMember(interaction);
+  if (!botCanManageRoles(interaction.guild)) {
+    return interaction.editReply("Sugar needs Manage Roles and must rank above your color role to customize it.");
+  }
+
+  const config = store.getGuild(interaction.guildId);
+  let roleId = config.colorRoleIds?.[member.id] ?? null;
+  let roleCache = interaction.guild.roles.cache;
+  if (typeof interaction.guild.roles.fetch === "function") {
+    try {
+      roleCache = await interaction.guild.roles.fetch();
+    } catch {
+      return interaction.editReply("Sugar could not check the server roles. No color role was changed.");
+    }
+  }
+  let role = roleId ? roleCache.get(roleId) : null;
+  if (roleId && !role) {
+    store.setColorRoleId(interaction.guildId, member.id, null);
+    roleId = null;
+  }
+
+  if (role && (role.managed || hasAnyPermissions(role) || role.editable === false)) {
+    return interaction.editReply("Your saved color role cannot be safely managed. Please contact a server admin.");
+  }
+
+  if (!role) {
+    if (roleCache.size >= MAX_GUILD_ROLES) {
+      return interaction.editReply("The server has reached Discord's role limit, so Sugar cannot create a color role.");
+    }
+    try {
+      role = await interaction.guild.roles.create({
+        name: `${toRoyalBold("Color")} · ${member.id.slice(-6)}`,
+        color,
+        permissions: [],
+        hoist: false,
+        mentionable: false,
+        reason: `Create a permissionless personal color role for member ${member.id}`,
+      });
+    } catch {
+      return interaction.editReply("Sugar could not create your color role. Check Manage Roles and role hierarchy.");
+    }
+  } else {
+    try {
+      role = await role.edit({ color }, `Update personal color role for member ${member.id}`);
+    } catch {
+      return interaction.editReply("Sugar could not update your color role. Check Manage Roles and role hierarchy.");
+    }
+  }
+
+  const createdRole = !roleId;
+  if (role.managed || hasAnyPermissions(role) || role.editable === false) {
+    if (createdRole) await role.delete?.("Remove an unsafe personal color role").catch(() => {});
+    return interaction.editReply("That role cannot be safely assigned as a self-role.");
+  }
+
+  try {
+    if (!member.roles.cache.has(role.id)) {
+      await member.roles.add(role, "Member customized their personal color role");
+    }
+    store.setColorRoleId(interaction.guildId, member.id, role.id);
+  } catch {
+    if (createdRole) {
+      await member.roles.remove(role, "Roll back an incomplete personal color assignment").catch(() => {});
+      await role.delete?.("Roll back an incomplete personal color assignment").catch(() => {});
+    }
+    return interaction.editReply("Sugar could not assign your color role. Check Manage Roles and role hierarchy.");
+  }
+
+  return interaction.editReply(`Your custom color role was updated to #${color.toString(16).padStart(6, "0").toUpperCase()}.`);
+}
+
+async function removeMemberColor(interaction, { store }) {
+  const config = store.getGuild(interaction.guildId);
+  if (!isActiveColorControl(interaction, config)) {
+    return replyEphemeral(interaction, "This color control is no longer active.");
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  const member = await resolveGuildMember(interaction);
+  const roleId = config.colorRoleIds?.[member.id];
+  if (!roleId) return interaction.editReply("You do not have a custom color role to remove.");
+
+  const role = interaction.guild.roles.cache.get(roleId);
+  if (!role) {
+    store.setColorRoleId(interaction.guildId, member.id, null);
+    return interaction.editReply("Your custom color role was already removed.");
+  }
+  if (role.managed || hasAnyPermissions(role) || role.editable === false || !botCanManageRoles(interaction.guild)) {
+    return interaction.editReply("Sugar cannot safely remove this role. Check Manage Roles and role hierarchy.");
+  }
+
+  try {
+    if (member.roles.cache.has(role.id)) {
+      await member.roles.remove(role, "Member removed their personal color role");
+    }
+    return interaction.editReply("Your custom color role was removed.");
+  } catch {
+    return interaction.editReply("Sugar could not remove your color role. Check Manage Roles and role hierarchy.");
+  }
+}
+
+function isActiveSelfRolePanel(interaction, config, client) {
+  return Boolean(
+    interaction.channelId === config.channelId &&
+      interaction.message?.id === config.messageId &&
+      interaction.message?.author?.id === client.user?.id,
+  );
+}
+
+function isActiveColorControl(interaction, config) {
+  return Boolean(
+    interaction.channelId === config.channelId &&
+      interaction.message?.author?.bot &&
+      interaction.message?.components?.some((row) =>
+        row.components?.some((component) => component.customId?.startsWith(`${SELF_ROLE_PREFIX}color:`)),
+      ),
+  );
+}
+
+function isValidColorInteraction(interaction, store) {
+  if (!interaction.inGuild?.() || !interaction.guild || !interaction.guildId) return false;
+  const config = store.getGuild(interaction.guildId);
+  return (
+    interaction.customId === `${SELF_ROLE_PREFIX}color:submit` &&
+    interaction.channelId === config.channelId
+  );
+}
+
+function botCanManageRoles(guild) {
+  try {
+    return Boolean(guild.members.me?.permissions?.has?.(PermissionFlagsBits.ManageRoles));
+  } catch {
+    return false;
   }
 }
 

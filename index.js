@@ -10,6 +10,7 @@ import { SettingsStore, resolveDataDir } from "./src/settings.js";
 import { MemoryStore } from "./src/memory.js";
 import { PrivateChatStore } from "./src/private-chat-store.js";
 import { SelfRoleStore } from "./src/self-role-store.js";
+import { NsfwVisibilityStore } from "./src/nsfw-visibility-store.js";
 import { ModerationLogStore } from "./src/moderation-log-store.js";
 import { OnboardingGuideStore } from "./src/onboarding-guide-store.js";
 import { createWeb } from "./src/web.js";
@@ -50,6 +51,7 @@ let settings;
 let memory;
 let privateChats;
 let selfRoles;
+let nsfwVisibility;
 let moderationLogs;
 let onboardingGuides;
 try {
@@ -58,6 +60,7 @@ try {
   memory = new MemoryStore(dataDir);
   privateChats = new PrivateChatStore(dataDir);
   selfRoles = new SelfRoleStore(dataDir);
+  nsfwVisibility = new NsfwVisibilityStore(dataDir);
   moderationLogs = new ModerationLogStore(dataDir);
   onboardingGuides = new OnboardingGuideStore(dataDir);
 } catch (error) {
@@ -78,6 +81,7 @@ const client = createBot({
   memory,
   privateChats,
   selfRoles,
+  nsfwVisibility,
   moderationLogs,
   onboardingGuides,
 });

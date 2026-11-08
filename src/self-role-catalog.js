@@ -1,116 +1,40 @@
 import { toRoyalBold } from "./embed-format.js";
 
-const COLORS = [
-  ["pink", "Pink", "#E91E63"],
-  ["light-pink", "Light Pink", "#F4A7C4"],
-  ["fuchsia", "Fuchsia", "#D946EF"],
-  ["red", "Red", "#EF4444"],
-  ["light-red", "Light Red", "#FCA5A5"],
-  ["orange", "Orange", "#F97316"],
-  ["light-orange", "Light Orange", "#FDBA74"],
-  ["yellow", "Yellow", "#EAB308"],
-  ["light-yellow", "Light Yellow", "#FEF08A"],
-  ["green", "Green", "#16A34A"],
-  ["light-green", "Light Green", "#86EFAC"],
-  ["teal", "Teal", "#14B8A6"],
-  ["cyan", "Cyan", "#06B6D4"],
-  ["blue", "Blue", "#2563EB"],
-  ["light-blue", "Light Blue", "#7DD3FC"],
-  ["purple", "Purple", "#7E22CE"],
-  ["lilac", "Lilac", "#C8A2C8"],
-  ["navy", "Navy", "#1E3A8A"],
-  ["brown", "Brown", "#8B5E3C"],
-  ["black", "Black", "#111827"],
-  ["grey", "Grey", "#6B7280"],
-  ["light-grey", "Light Grey", "#D1D5DB"],
-  ["white", "White", "#F9FAFB"],
-];
-
-const ageOptions = [
-  { key: "under-18", label: "Under 18", description: "Self-declared; not age verification." },
-  ...Array.from({ length: 23 }, (_, index) => {
-    const age = index + 18;
-    return { key: String(age), label: String(age) };
-  }),
-];
-
-function options(keys) {
-  return keys.map((label) => ({
-    key: label.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, ""),
-    label,
-  }));
-}
-
 export const SELF_ROLE_CATEGORIES = Object.freeze([
   {
     key: "age",
     label: "Age",
     selection: "single",
-    description: "Choose one self-declared age. It is not age verification.",
-    options: ageOptions,
+    description: "Age roles are self-declared only and never verify age.",
+    options: [],
   },
   {
     key: "gender",
     label: "Gender",
     selection: "single",
-    description: "Choose one, or clear your selection.",
-    options: options(["Female", "Male", "Nonbinary", "Genderfluid", "Agender", "Questioning", "Another identity"]),
+    description: "Gender options are waiting for your approval.",
+    options: [],
   },
   {
     key: "sexuality",
     label: "Sexuality",
     selection: "multiple",
-    description: "Choose any that fit, or clear all selections.",
-    options: options([
-      "Straight",
-      "Gay/Lesbian",
-      "Bisexual",
-      "Pansexual",
-      "Asexual",
-      "Queer",
-      "Questioning",
-      "Another identity",
-    ]),
+    description: "Sexuality options are waiting for your approval.",
+    options: [],
   },
   {
     key: "interests",
     label: "Interests",
     selection: "multiple",
-    description: "Choose any interests, or clear all selections.",
-    options: options([
-      "Anime",
-      "Manga",
-      "Gaming",
-      "Music",
-      "Movies",
-      "TV Shows",
-      "Books",
-      "Writing",
-      "Art",
-      "Photography",
-      "Cosplay",
-      "Sports",
-      "Fitness",
-      "Technology",
-      "Programming",
-      "Fashion",
-      "Makeup",
-      "Cooking",
-      "Pets",
-      "Travel",
-    ]),
+    description: "Interest options are waiting for your approval.",
+    options: [],
   },
   {
     key: "color",
     label: "Color",
     selection: "single",
-    description: "Choose one preset role color, or clear it.",
-    options: COLORS.map(([key, label, hex]) => ({
-      key,
-      label,
-      hex,
-      color: Number.parseInt(hex.slice(1), 16),
-    })),
+    description: "Choose a custom hex color or remove your color role.",
+    options: [],
   },
 ]);
 
@@ -121,6 +45,7 @@ export const SELF_ROLE_KEYS = Object.freeze(
 );
 
 const roleKeySet = new Set(SELF_ROLE_KEYS);
+const categoryKeySet = new Set(SELF_ROLE_CATEGORIES.map((category) => category.key));
 
 export const SELF_ROLE_STAFF_KEY = "staff";
 export const SELF_ROLE_STAFF_NAME = toRoyalBold("Staff");
@@ -156,7 +81,11 @@ export function getSelfRoleDefinition(roleKey) {
 }
 
 export function isSelfRoleKey(value) {
-  return roleKeySet.has(value);
+  if (roleKeySet.has(value)) return true;
+  const match = String(value ?? "").match(/^([a-z-]+):([a-z0-9-]+)$/u);
+  // Keep previously persisted role IDs readable, but assignment still checks
+  // only the currently approved category.options list.
+  return Boolean(match && categoryKeySet.has(match[1]));
 }
 
 /** NFKC makes Mathematical Script role names compare to their Latin names. */

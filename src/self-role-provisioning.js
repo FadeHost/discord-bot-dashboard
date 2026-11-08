@@ -10,6 +10,7 @@ import {
   SELF_ROLE_STAFF_KEY,
   SELF_ROLE_STAFF_NAME,
   getSelfRoleDefinition,
+  getSelfRoleCategory,
   normalizeSelfRoleName,
 } from "./self-role-catalog.js";
 
@@ -95,12 +96,14 @@ export async function ensureSelfRoles(guild, store) {
   }
   if (!roles?.values) throw new Error(`Role inventory is unavailable in guild ${guild.id}; self-role setup was stopped.`);
 
-  const definitions = [
-    ...SELF_ROLE_CATEGORIES.flatMap((category) =>
+  const definitions = SELF_ROLE_CATEGORIES.flatMap((category) =>
       category.options.map((option) => getSelfRoleDefinition(`${category.key}:${option.key}`)),
-    ),
-    { key: SELF_ROLE_STAFF_KEY, name: SELF_ROLE_STAFF_NAME, color: null },
-  ];
+    );
+  if (!definitions.length) return {};
+
+  if (getSelfRoleCategory("age")?.options.some((option) => option.key === "under-18")) {
+    definitions.push({ key: SELF_ROLE_STAFF_KEY, name: SELF_ROLE_STAFF_NAME, color: null });
+  }
   const current = store.getGuild(guild.id);
   const matches = new Map();
 
@@ -196,17 +199,22 @@ export function buildSelfRolePickerPayload() {
     .setTitle(formatEmbedTitle("Choose your self roles"))
     .setDescription(
       [
-        "Use a category button below to select or remove your own roles.",
+        "Choose one of the five approved categories below. Your role options are waiting for approval, so no unapproved role choices are active.",
         "",
-        "Age choices are self-declared and are never age verification. Choosing Under 18 opens a private staff-review ticket; it does not automatically jail or punish anyone.",
+        "Any future age role will be self-declared only. It will never verify age, grant age-restricted access, or change Discord's native channel restrictions.",
         "",
-        "Preset color roles let you choose a displayed color where Discord's role hierarchy permits it.",
+        "Color lets you enter a custom hex value. Sugar only creates or updates a permissionless color role when it can safely manage that role.",
       ].join("\n"),
     )
     .addFields(
       SELF_ROLE_CATEGORIES.map((category) => ({
         name: toRoyalBold(category.label),
-        value: category.description,
+        value:
+          category.key === "color"
+            ? "Customize your own color, or remove it."
+            : category.key === "age"
+              ? "Self-declared only; never age verification."
+              : "Role choices will be added after approval.",
       })),
     )
     .setFooter({ text: SELF_ROLE_EMBED_FOOTER });

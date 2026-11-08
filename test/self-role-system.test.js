@@ -91,75 +91,19 @@ function makeFixture(t, { selectedRoleKeys = [] } = {}) {
   return { directory, store, roleCache, roleIds, member, guild, staffRole };
 }
 
-test("the approved role catalog has exactly five categories and the approved choices", () => {
-  assert.deepEqual(
-    SELF_ROLE_CATEGORIES.map(({ key, selection, options }) => [key, selection, options.length]),
-    [
-      ["age", "single", 24],
-      ["gender", "single", 7],
-      ["sexuality", "multiple", 8],
-      ["interests", "multiple", 20],
-      ["color", "single", 23],
-    ],
-  );
-  assert.deepEqual(
-    SELF_ROLE_CATEGORIES.find(({ key }) => key === "interests").options.map(({ label }) => label),
-    [
-      "Anime",
-      "Manga",
-      "Gaming",
-      "Music",
-      "Movies",
-      "TV Shows",
-      "Books",
-      "Writing",
-      "Art",
-      "Photography",
-      "Cosplay",
-      "Sports",
-      "Fitness",
-      "Technology",
-      "Programming",
-      "Fashion",
-      "Makeup",
-      "Cooking",
-      "Pets",
-      "Travel",
-    ],
-  );
-  assert.deepEqual(
-    SELF_ROLE_CATEGORIES.find(({ key }) => key === "color").options.map(({ label, hex }) => [label, hex]),
-    [
-      ["Pink", "#E91E63"],
-      ["Light Pink", "#F4A7C4"],
-      ["Fuchsia", "#D946EF"],
-      ["Red", "#EF4444"],
-      ["Light Red", "#FCA5A5"],
-      ["Orange", "#F97316"],
-      ["Light Orange", "#FDBA74"],
-      ["Yellow", "#EAB308"],
-      ["Light Yellow", "#FEF08A"],
-      ["Green", "#16A34A"],
-      ["Light Green", "#86EFAC"],
-      ["Teal", "#14B8A6"],
-      ["Cyan", "#06B6D4"],
-      ["Blue", "#2563EB"],
-      ["Light Blue", "#7DD3FC"],
-      ["Purple", "#7E22CE"],
-      ["Lilac", "#C8A2C8"],
-      ["Navy", "#1E3A8A"],
-      ["Brown", "#8B5E3C"],
-      ["Black", "#111827"],
-      ["Grey", "#6B7280"],
-      ["Light Grey", "#D1D5DB"],
-      ["White", "#F9FAFB"],
-    ],
-  );
-  const ages = SELF_ROLE_CATEGORIES.find(({ key }) => key === "age").options.map(({ label }) => label);
-  assert.deepEqual(ages, ["Under 18", ...Array.from({ length: 23 }, (_, index) => String(index + 18))]);
+test("the role catalog contains only the five approved categories and no unapproved options", () => {
+  assert.deepEqual(SELF_ROLE_CATEGORIES.map(({ key }) => key), [
+    "age",
+    "gender",
+    "sexuality",
+    "interests",
+    "color",
+  ]);
+  assert.ok(SELF_ROLE_CATEGORIES.every((category) => category.options.length === 0));
+  assert.match(SELF_ROLE_CATEGORIES.find(({ key }) => key === "age").description, /never verify age/i);
 });
 
-test("the picker and role menu use Royal Bold labels and stay within Discord's menu limit", () => {
+test("the pink self-role panel uses Royal Bold styling and clearly holds options pending approval", () => {
   const payload = buildSelfRolePickerPayload();
   const embed = payload.embeds[0].toJSON();
   assert.equal(embed.color, 0xf472b6);
@@ -168,74 +112,36 @@ test("the picker and role menu use Royal Bold labels and stay within Discord's m
   assert.ok(embed.fields.every(({ name }) => name === toRoyalBold(name.normalize("NFKC"))));
   assert.equal(payload.components[0].components.length, 5);
   assert.ok(payload.components[0].components.every(({ data }) => data.label === toRoyalBold(data.label.normalize("NFKC"))));
-  assert.match(embed.description, /never age verification/i);
-  assert.match(embed.description, /does not automatically jail/i);
-
-  const age = SELF_ROLE_CATEGORIES.find(({ key }) => key === "age");
-  const roleIds = Object.fromEntries(age.options.map((option) => [`age:${option.key}`, option.key]));
-  const member = { roles: { cache: new Map([["18", {}], ["19", {}]]) } };
-  const ageMenu = buildSelfRoleSelectionRow("age", roleIds, member).toJSON().components[0];
-  assert.equal(ageMenu.options.length, 25);
-  assert.equal(ageMenu.max_values, 1);
-  assert.equal(ageMenu.options.filter(({ default: isDefault }) => isDefault).length, 1);
-  assert.ok(ageMenu.options.every(({ label }) => label === toRoyalBold(label.normalize("NFKC"))));
-
-  const interestsMenu = buildSelfRoleSelectionRow("interests", {}, { roles: { cache: new Map() } })
-    .toJSON().components[0];
-  assert.equal(interestsMenu.options.length, 20);
-  assert.equal(interestsMenu.min_values, 0);
-  assert.equal(interestsMenu.max_values, 20);
+  assert.match(embed.description, /waiting for approval/i);
+  assert.match(embed.description, /never verify age/i);
+  assert.match(embed.description, /grant age-restricted access/i);
+  assert.match(embed.description, /custom hex value/i);
 });
 
-test("member selections enforce category exclusivity and allow removing roles", async (t) => {
-  const { store, roleIds, member, guild } = makeFixture(t);
+test("unapproved and forged role choices cannot add or remove any member roles", async (t) => {
+  const { store, member, guild } = makeFixture(t);
+  store.setRoleId(GUILD_ID, "age:18", "941800000000000777");
+  guild.roles.cache.set("941800000000000777", {
+    id: "941800000000000777",
+    permissions: { bitfield: PermissionFlagsBits.ManageRoles },
+    editable: true,
+    managed: false,
+  });
 
-  await applySelfRoleSelection(member, guild, store, "gender", ["female"]);
-  assert.equal(member.roles.cache.has(roleIds["gender:female"]), true);
-
-  await applySelfRoleSelection(member, guild, store, "gender", ["male"]);
-  assert.equal(member.roles.cache.has(roleIds["gender:female"]), false);
-  assert.equal(member.roles.cache.has(roleIds["gender:male"]), true);
-
-  await applySelfRoleSelection(member, guild, store, "interests", ["anime", "manga"]);
-  assert.equal(member.roles.cache.has(roleIds["interests:anime"]), true);
-  assert.equal(member.roles.cache.has(roleIds["interests:manga"]), true);
-
-  await applySelfRoleSelection(member, guild, store, "interests", ["manga"]);
-  assert.equal(member.roles.cache.has(roleIds["interests:anime"]), false);
-  assert.equal(member.roles.cache.has(roleIds["interests:manga"]), true);
-
-  await applySelfRoleSelection(member, guild, store, "interests", []);
-  assert.equal(member.roles.cache.has(roleIds["interests:manga"]), false);
-});
-
-test("age and color menus clear selections, and forged or conflicting values are rejected", async (t) => {
-  const { store, roleIds, member, guild } = makeFixture(t);
-
-  await applySelfRoleSelection(member, guild, store, "age", ["18"]);
-  assert.equal(member.roles.cache.has(roleIds["age:18"]), true);
-  await applySelfRoleSelection(member, guild, store, "age", ["clear"]);
-  assert.equal(member.roles.cache.has(roleIds["age:18"]), false);
-
-  await applySelfRoleSelection(member, guild, store, "color", ["lilac"]);
-  assert.equal(member.roles.cache.has(roleIds["color:lilac"]), true);
-  await applySelfRoleSelection(member, guild, store, "color", ["clear"]);
-  assert.equal(member.roles.cache.has(roleIds["color:lilac"]), false);
-
-  await assert.rejects(applySelfRoleSelection(member, guild, store, "age", ["18", "19"]), /only one/);
-  await assert.rejects(applySelfRoleSelection(member, guild, store, "interests", ["anime", "unapproved"]), /not part/);
-  await assert.rejects(applySelfRoleSelection(member, guild, store, "custom", []), /not available/);
-});
-
-test("self-assignment refuses roles with permissions instead of granting them", async (t) => {
-  const { store, roleIds, member, guild } = makeFixture(t);
-  guild.roles.cache.get(roleIds["gender:female"]).permissions.bitfield = PermissionFlagsBits.ManageRoles;
-
-  await assert.rejects(
-    applySelfRoleSelection(member, guild, store, "gender", ["female"]),
-    /cannot be safely managed/,
-  );
+  for (const [category, option] of [
+    ["age", "18"],
+    ["gender", "female"],
+    ["sexuality", "bisexual"],
+    ["interests", "gaming"],
+  ]) {
+    await assert.rejects(
+      applySelfRoleSelection(member, guild, store, category, [option]),
+      /waiting for approval/,
+    );
+  }
   assert.equal(member.roles.cache.size, 0);
+  assert.throws(() => buildSelfRoleSelectionRow("age", {}, member), /waiting for approval/);
+  await assert.rejects(applySelfRoleSelection(member, guild, store, "custom", []), /not available/);
 });
 
 test("review tickets are private and grant no server-wide privileges to the member or staff role", () => {

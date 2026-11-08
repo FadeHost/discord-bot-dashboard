@@ -9,7 +9,7 @@ const MAX_TICKETS_PER_GUILD = 10_000;
 const SNOWFLAKE = /^\d{5,25}$/u;
 
 function emptyGuild() {
-  return { channelId: null, messageId: null, staffRoleId: null, roleIds: {}, tickets: {} };
+  return { channelId: null, messageId: null, staffRoleId: null, roleIds: {}, colorRoleIds: {}, tickets: {} };
 }
 
 /**
@@ -68,12 +68,40 @@ export class SelfRoleStore {
       delete roleIds[roleKey];
     }
 
-    const allIds = [...Object.values(roleIds), ...(staffRoleId ? [staffRoleId] : [])];
+    const allIds = [
+      ...Object.values(roleIds),
+      ...Object.values(current.colorRoleIds),
+      ...(staffRoleId ? [staffRoleId] : []),
+    ];
     if (new Set(allIds).size !== allIds.length) {
       throw new Error("A Discord role cannot be used for more than one self-role option.");
     }
 
     this.#replaceGuild(id, { ...current, roleIds, staffRoleId });
+  }
+
+  setColorRoleId(guildId, memberId, roleId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const parsed = roleId === null ? null : snowflake(roleId, "role");
+    const current = this.#guild(id);
+    const colorRoleIds = { ...current.colorRoleIds };
+    if (parsed) {
+      colorRoleIds[member] = parsed;
+    } else {
+      delete colorRoleIds[member];
+    }
+
+    const allIds = [
+      ...Object.values(current.roleIds),
+      ...Object.values(colorRoleIds),
+      ...(current.staffRoleId ? [current.staffRoleId] : []),
+    ];
+    if (new Set(allIds).size !== allIds.length) {
+      throw new Error("A Discord role cannot be used for more than one self-role option.");
+    }
+
+    this.#replaceGuild(id, { ...current, colorRoleIds });
   }
 
   getTicket(guildId, channelId) {
@@ -146,7 +174,7 @@ export class SelfRoleStore {
   }
 
   #guild(guildId) {
-    return this.data.guilds[guildId] ?? emptyGuild();
+    return copyGuild(this.data.guilds[guildId] ?? emptyGuild());
   }
 
   #replaceGuild(guildId, guild) {
@@ -206,13 +234,23 @@ function isValidGuild(guild) {
     !nullableSnowflake(guild.messageId) ||
     !nullableSnowflake(guild.staffRoleId) ||
     !isObject(guild.roleIds) ||
+    (guild.colorRoleIds !== undefined && !isObject(guild.colorRoleIds)) ||
     !isObject(guild.tickets) ||
     Object.keys(guild.roleIds).length > 100 ||
+    Object.keys(guild.colorRoleIds ?? {}).length > 100_000 ||
     Object.keys(guild.tickets).length > MAX_TICKETS_PER_GUILD ||
     (!guild.channelId && guild.messageId) ||
     Object.entries(guild.roleIds).some(([key, roleId]) => !isSelfRoleKey(key) || !isSnowflake(roleId)) ||
-    Object.values(guild.roleIds).includes(guild.staffRoleId) ||
-    new Set(Object.values(guild.roleIds)).size !== Object.keys(guild.roleIds).length ||
+    Object.entries(guild.colorRoleIds ?? {}).some(
+      ([memberId, roleId]) => !isSnowflake(memberId) || !isSnowflake(roleId),
+    ) ||
+    new Set([
+      ...Object.values(guild.roleIds),
+      ...Object.values(guild.colorRoleIds ?? {}),
+      ...(guild.staffRoleId ? [guild.staffRoleId] : []),
+    ]).size !== Object.keys(guild.roleIds).length +
+      Object.keys(guild.colorRoleIds ?? {}).length +
+      (guild.staffRoleId ? 1 : 0) ||
     Object.entries(guild.tickets).some(([channelId, ticket]) => !isValidTicket(channelId, ticket))
   ) {
     return false;
@@ -262,6 +300,7 @@ function copyGuild(guild) {
   return {
     ...guild,
     roleIds: { ...guild.roleIds },
+    colorRoleIds: { ...(guild.colorRoleIds ?? {}) },
     tickets: Object.fromEntries(
       Object.entries(guild.tickets).map(([channelId, ticket]) => [channelId, { ...ticket }]),
     ),

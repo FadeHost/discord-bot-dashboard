@@ -32,6 +32,7 @@ test("self-role channel, roles, and review tickets survive a new store instance"
     messageId: "941800000000000006",
     staffRoleId: STAFF_ROLE_ID,
     roleIds: { "age:18": AGE_ROLE_ID },
+    colorRoleIds: {},
     tickets: {
       "941800000000000007": {
         memberId: MEMBER_ID,
@@ -67,6 +68,17 @@ test("role IDs cannot be reused across self-role options or accepted for unappro
   store.setRoleId(GUILD_ID, "age:18", AGE_ROLE_ID);
   assert.throws(() => store.setRoleId(GUILD_ID, "gender:female", AGE_ROLE_ID), /more than one self-role option/);
   assert.throws(() => store.setRoleId(GUILD_ID, "custom:role", "941800000000000009"), /not part of the approved/);
+});
+
+test("personal color role mappings persist and cannot reuse an approved role ID", (t) => {
+  const directory = dataDirectory(t);
+  const store = new SelfRoleStore(directory);
+  const colorRoleId = "941800000000000010";
+  store.setColorRoleId(GUILD_ID, MEMBER_ID, colorRoleId);
+  assert.equal(new SelfRoleStore(directory).getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], colorRoleId);
+  assert.throws(() => store.setRoleId(GUILD_ID, "age:18", colorRoleId), /more than one self-role option/);
+  store.setColorRoleId(GUILD_ID, MEMBER_ID, null);
+  assert.equal(new SelfRoleStore(directory).getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], undefined);
 });
 
 test("deleted channels clear only matching panel or ticket metadata", (t) => {

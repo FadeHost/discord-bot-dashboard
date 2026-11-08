@@ -7,16 +7,13 @@ import { ChannelType, Collection, PermissionFlagsBits } from "discord.js";
 
 import { toRoyalBold } from "../src/embed-format.js";
 import {
-  SELF_ROLE_CATEGORIES,
   SELF_ROLE_CHANNEL_NAME,
   SELF_ROLE_EMBED_FOOTER,
-  SELF_ROLE_STAFF_NAME,
 } from "../src/self-role-catalog.js";
 import {
   ensureSelfRoleChannel,
   ensureSelfRolePanel,
   ensureSelfRoles,
-  MAX_GUILD_ROLES,
 } from "../src/self-role-provisioning.js";
 import { SelfRoleStore } from "../src/self-role-store.js";
 
@@ -182,37 +179,24 @@ test("an unavailable channel inventory fails closed instead of creating a duplic
   assert.equal(createCalls, 0);
 });
 
-test("provisioning creates the approved roles once with no server-wide permissions", async (t) => {
+test("provisioning creates no unapproved self-role or staff roles", async (t) => {
   const dataDir = directory(t);
   const store = new SelfRoleStore(dataDir);
   const everyone = role(GUILD_ID, "@everyone");
   const { guild, roleCache, createCalls } = guildWithRoleManager([everyone]);
 
   const roleIds = await ensureSelfRoles(guild, store);
-  assert.equal(Object.keys(roleIds).length, 82);
-  assert.equal(createCalls.length, 83);
-  assert.equal(roleCache.size, 84);
-  const staffRoleId = store.getGuild(GUILD_ID).staffRoleId;
-  assert.equal(roleCache.get(staffRoleId).name, SELF_ROLE_STAFF_NAME);
-  assert.ok(createCalls.every(({ permissions, mentionable, hoist }) =>
-    Array.isArray(permissions) && permissions.length === 0 && mentionable === false && hoist === false));
-
-  for (const category of SELF_ROLE_CATEGORIES) {
-    for (const option of category.options) {
-      const roleId = roleIds[`${category.key}:${option.key}`];
-      const created = roleCache.get(roleId);
-      assert.equal(created.name, toRoyalBold(`${category.label} · ${option.label}`));
-      assert.equal(created.permissions.bitfield, 0n);
-      if (option.color !== undefined) assert.equal(created.color, option.color);
-    }
-  }
+  assert.deepEqual(roleIds, {});
+  assert.equal(createCalls.length, 0);
+  assert.equal(roleCache.size, 1);
+  assert.equal(store.getGuild(GUILD_ID).staffRoleId, null);
 
   const restarted = new SelfRoleStore(dataDir);
-  assert.equal(Object.keys(await ensureSelfRoles(guild, restarted)).length, 82);
-  assert.equal(createCalls.length, 83);
+  assert.deepEqual(await ensureSelfRoles(guild, restarted), {});
+  assert.equal(createCalls.length, 0);
 });
 
-test("a matching privileged role blocks provisioning before any roles are created", async (t) => {
+test("existing role names are left untouched while role choices await approval", async (t) => {
   const store = new SelfRoleStore(directory(t));
   const privileged = role(
     "941800000000000006",
@@ -221,29 +205,10 @@ test("a matching privileged role blocks provisioning before any roles are create
   );
   const { guild, createCalls } = guildWithRoleManager([role(GUILD_ID, "@everyone"), privileged]);
 
-  await assert.rejects(ensureSelfRoles(guild, store), /has permissions or is managed/);
+  assert.deepEqual(await ensureSelfRoles(guild, store), {});
   assert.equal(createCalls.length, 0);
-});
-
-test("an unregistered Staff role is not reused for private-ticket access", async (t) => {
-  const store = new SelfRoleStore(directory(t));
-  const existingStaff = role("941800000000000008", SELF_ROLE_STAFF_NAME);
-  const { guild, createCalls } = guildWithRoleManager([role(GUILD_ID, "@everyone"), existingStaff]);
-
-  await assert.rejects(ensureSelfRoles(guild, store), /not registered as this feature's review role/);
-  assert.equal(createCalls.length, 0);
-});
-
-test("the role limit is checked before partial provisioning", async (t) => {
-  const store = new SelfRoleStore(directory(t));
-  const initialRoles = [role(GUILD_ID, "@everyone")];
-  for (let index = 1; index < MAX_GUILD_ROLES; index += 1) {
-    initialRoles.push(role(`94180000000${String(index).padStart(7, "0")}`, `existing-${index}`));
-  }
-  const { guild, createCalls } = guildWithRoleManager(initialRoles);
-
-  await assert.rejects(ensureSelfRoles(guild, store), /needs 83 new roles/);
-  assert.equal(createCalls.length, 0);
+  assert.equal(privileged.name, toRoyalBold("Age · 18"));
+  assert.equal(privileged.permissions.bitfield, PermissionFlagsBits.ManageRoles);
 });
 
 test("the self-role panel is edited on restart instead of duplicated", async (t) => {

@@ -72,8 +72,30 @@ function makeFixture(t, { initialRoles = [] } = {}) {
   const guild = {
     id: GUILD_ID,
     ownerId: "941800000000000099",
-    roles: { cache: roleCache, everyone: roleCache.get(GUILD_ID) },
-    members: { fetch: async (id) => (id === MEMBER_ID ? member : staffMember) },
+    roles: {
+      cache: roleCache,
+      everyone: roleCache.get(GUILD_ID),
+      create: async (options) => {
+        const role = {
+          id: "941800000000000088",
+          name: options.name,
+          color: options.color,
+          permissions: { bitfield: 0n },
+          managed: false,
+          editable: true,
+          edit: async function (changes) {
+            Object.assign(this, changes);
+            return this;
+          },
+        };
+        roleCache.set(role.id, role);
+        return role;
+      },
+    },
+    members: {
+      me: { permissions: { has: (flag) => flag === PermissionFlagsBits.ManageRoles } },
+      fetch: async (id) => (id === MEMBER_ID ? member : staffMember),
+    },
     channels: {
       fetch: async (id) => ticketChannels.get(id) ?? null,
       create: async (options) => {
@@ -172,9 +194,16 @@ function makeInteraction(fixture, {
     inGuild: () => true,
     isButton: () => kind === "button",
     isStringSelectMenu: () => kind === "select",
+    isModalSubmit: () => kind === "modal",
+    fields: { getTextInputValue: () => "#EFAAC9" },
     reply: async (payload) => {
       interaction.replied = true;
       events.push({ type: "reply", payload });
+    },
+    showModal: async (modal) => events.push({ type: "show-modal", modal }),
+    deferReply: async (options) => {
+      interaction.deferred = true;
+      events.push({ type: "defer-reply", options });
     },
     deferUpdate: async () => {
       interaction.deferred = true;
@@ -186,21 +215,16 @@ function makeInteraction(fixture, {
   return interaction;
 }
 
-test("category buttons open a personalized ephemeral menu from the active panel only", async (t) => {
-  const fixture = makeFixture(t, { initialRoles: ["gender:female"] });
+test("category buttons state that role choices await approval and reject stale panels", async (t) => {
+  const fixture = makeFixture(t);
   const interaction = makeInteraction(fixture, { customId: "self-role:open:gender" });
 
   assert.equal(isSelfRoleInteraction(interaction), true);
   await handleSelfRoleInteraction(interaction, fixture);
 
-  const reply = interaction.events[0].payload;
-  assert.equal(reply.ephemeral, true);
-  const menu = reply.components[0].components[0].toJSON();
-  assert.equal(menu.custom_id, "self-role:select:gender");
-  assert.equal(
-    menu.options.find(({ value }) => value === "female").default,
-    true,
-  );
+  assert.equal(interaction.events[0].payload.ephemeral, true);
+  assert.match(interaction.events[0].payload.content, /waiting for your approval/i);
+  assert.equal(fixture.member.roles.cache.size, 0);
 
   const wrongChannel = makeInteraction(fixture, {
     customId: "self-role:open:gender",
@@ -210,7 +234,7 @@ test("category buttons open a personalized ephemeral menu from the active panel 
   assert.match(wrongChannel.events[0].payload.content, /no longer active/);
 });
 
-test("multi-select interaction updates only the member's approved roles", async (t) => {
+test("forged multi-select values cannot assign any unapproved role", async (t) => {
   const fixture = makeFixture(t);
   const interaction = makeInteraction(fixture, {
     customId: "self-role:select:sexuality",
@@ -219,135 +243,12 @@ test("multi-select interaction updates only the member's approved roles", async 
   });
 
   await handleSelfRoleInteraction(interaction, fixture);
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["sexuality:straight"]), true);
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["sexuality:asexual"]), true);
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["gender:female"]), false);
   assert.equal(interaction.events[0].type, "defer-update");
-  assert.match(interaction.events.at(-1).payload.content, /2 approved roles selected/);
-
-  const clear = makeInteraction(fixture, {
-    customId: "self-role:select:sexuality",
-    kind: "select",
-    values: [],
-  });
-  await handleSelfRoleInteraction(clear, fixture);
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["sexuality:straight"]), false);
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["sexuality:asexual"]), false);
-  assert.match(clear.events.at(-1).payload.content, /selection cleared/);
+  assert.match(interaction.events.at(-1).payload.content, /not part of the approved list/i);
+  assert.equal(fixture.member.roles.cache.size, 0);
 });
 
-test("Under 18 creates one private ticket and remains a self-declared, mutually exclusive age choice", async (t) => {
-  const fixture = makeFixture(t, { initialRoles: ["age:18"] });
-  const first = makeInteraction(fixture, {
-    customId: "self-role:select:age",
-    kind: "select",
-    values: ["under-18"],
-  });
-  await handleSelfRoleInteraction(first, fixture);
-
-  assert.equal(fixture.createdTicketOptions.length, 1);
-  assert.equal(fixture.createdTicketOptions[0].name.includes("୨୧"), true);
-  assert.deepEqual(
-    fixture.createdTicketOptions[0].permissionOverwrites.map(({ id }) => id),
-    [GUILD_ID, MEMBER_ID, STAFF_ROLE_ID, BOT_ID],
-  );
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["age:18"]), false);
-  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["age:under-18"]), true);
-  const open = fixture.store.getOpenTicket(GUILD_ID, MEMBER_ID);
-  assert.ok(open);
-  const channel = fixture.ticketChannels.get(open.channelId);
-  assert.equal(channel.topic, `sugar-ai:self-role-review:${GUILD_ID}:${MEMBER_ID}`);
-  assert.match(fixture.ticketMessages[0].embeds[0].data.description, /not age verification/i);
-  assert.deepEqual(fixture.ticketMessages[0].allowedMentions.roles, [STAFF_ROLE_ID]);
-  assert.match(fixture.ticketMessages[0].content, new RegExp(`<@&${STAFF_ROLE_ID}>`));
-  assert.match(first.events.at(-1).payload.content, /no automatic jail/i);
-
-  const second = makeInteraction(fixture, {
-    customId: "self-role:select:age",
-    kind: "select",
-    values: ["under-18"],
-  });
-  await handleSelfRoleInteraction(second, fixture);
-  assert.equal(fixture.createdTicketOptions.length, 1);
-  assert.match(second.events.at(-1).payload.content, /existing private review ticket/);
-});
-
-test("only staff or administrators can close a review ticket; the member retains read access", async (t) => {
-  const fixture = makeFixture(t);
-  const selection = makeInteraction(fixture, {
-    customId: "self-role:select:age",
-    kind: "select",
-    values: ["under-18"],
-  });
-  await handleSelfRoleInteraction(selection, fixture);
-  const open = fixture.store.getOpenTicket(GUILD_ID, MEMBER_ID);
-  const ticketChannel = fixture.ticketChannels.get(open.channelId);
-
-  const memberClose = makeInteraction(fixture, {
-    customId: "self-role:ticket-close",
-    userId: MEMBER_ID,
-    member: fixture.member,
-    channelId: open.channelId,
-    channel: ticketChannel,
-  });
-  await handleSelfRoleInteraction(memberClose, fixture);
-  assert.match(memberClose.events[0].payload.content, /Only the configured staff role/);
-  assert.equal(fixture.permissionEdits.length, 0);
-  assert.equal(fixture.store.getTicket(GUILD_ID, open.channelId).status, "open");
-
-  const staffClose = makeInteraction(fixture, {
-    customId: "self-role:ticket-close",
-    userId: OTHER_ID,
-    member: fixture.staffMember,
-    channelId: open.channelId,
-    channel: ticketChannel,
-  });
-  await handleSelfRoleInteraction(staffClose, fixture);
-  assert.deepEqual(fixture.permissionEdits[0].slice(0, 2), [MEMBER_ID, { SendMessages: false }]);
-  assert.equal(fixture.store.getTicket(GUILD_ID, open.channelId).status, "closed");
-  assert.deepEqual(staffClose.events.at(-1).payload.components, []);
-  assert.match(staffClose.events.at(-1).payload.content, /can still read the ticket/);
-});
-
-test("tickets with changed visibility permissions are neither reused nor closed", async (t) => {
-  const fixture = makeFixture(t);
-  const selection = makeInteraction(fixture, {
-    customId: "self-role:select:age",
-    kind: "select",
-    values: ["under-18"],
-  });
-  await handleSelfRoleInteraction(selection, fixture);
-  const open = fixture.store.getOpenTicket(GUILD_ID, MEMBER_ID);
-  const ticketChannel = fixture.ticketChannels.get(open.channelId);
-  ticketChannel.permissionOverwrites.cache.set("941800000000000098", {
-    id: "941800000000000098",
-    allow: permissionBits([PermissionFlagsBits.ViewChannel]),
-    deny: permissionBits(),
-  });
-
-  const retry = makeInteraction(fixture, {
-    customId: "self-role:select:age",
-    kind: "select",
-    values: ["under-18"],
-  });
-  await handleSelfRoleInteraction(retry, fixture);
-  assert.equal(fixture.createdTicketOptions.length, 1);
-  assert.match(retry.events.at(-1).payload.content, /could not be verified/);
-
-  const close = makeInteraction(fixture, {
-    customId: "self-role:ticket-close",
-    userId: OTHER_ID,
-    member: fixture.staffMember,
-    channelId: open.channelId,
-    channel: ticketChannel,
-  });
-  await handleSelfRoleInteraction(close, fixture);
-  assert.match(close.events[0].payload.content, /private permissions changed/);
-  assert.equal(fixture.permissionEdits.length, 0);
-  assert.equal(fixture.store.getTicket(GUILD_ID, open.channelId).status, "open");
-});
-
-test("invalid Under 18 selections do not open tickets or change roles", async (t) => {
+test("unapproved age options cannot create tickets, assign roles, or verify age", async (t) => {
   const fixture = makeFixture(t);
   const interaction = makeInteraction(fixture, {
     customId: "self-role:select:age",
@@ -358,29 +259,103 @@ test("invalid Under 18 selections do not open tickets or change roles", async (t
   await handleSelfRoleInteraction(interaction, fixture);
   assert.equal(fixture.createdTicketOptions.length, 0);
   assert.equal(fixture.member.roles.cache.size, 0);
-  assert.match(interaction.events.at(-1).payload.content, /only one approved option/);
+  assert.equal(fixture.store.getOpenTicket(GUILD_ID, MEMBER_ID), null);
+  assert.match(interaction.events.at(-1).payload.content, /approved option/i);
 });
 
-test("unrelated channel permission flags are not added by ticket closure", async (t) => {
+test("color category offers a custom color modal and a removal control", async (t) => {
   const fixture = makeFixture(t);
-  const selection = makeInteraction(fixture, {
-    customId: "self-role:select:age",
-    kind: "select",
-    values: ["under-18"],
-  });
-  await handleSelfRoleInteraction(selection, fixture);
-  const open = fixture.store.getOpenTicket(GUILD_ID, MEMBER_ID);
-  const ticketChannel = fixture.ticketChannels.get(open.channelId);
-  const admin = makeInteraction(fixture, {
-    customId: "self-role:ticket-close",
-    userId: OTHER_ID,
-    member: fixture.staffMember,
-    channelId: open.channelId,
-    channel: ticketChannel,
-    permissions: { has: (flag) => flag === PermissionFlagsBits.Administrator },
-  });
+  const category = makeInteraction(fixture, { customId: "self-role:open:color" });
+  await handleSelfRoleInteraction(category, fixture);
+  const controls = category.events[0].payload.components[0].components;
+  assert.deepEqual(controls.map((button) => button.data.custom_id), [
+    "self-role:color:set",
+    "self-role:color:remove",
+  ]);
 
-  await handleSelfRoleInteraction(admin, fixture);
-  assert.equal(fixture.store.getTicket(GUILD_ID, open.channelId).status, "closed");
+  const set = makeInteraction(fixture, {
+    customId: "self-role:color:set",
+    message: {
+      author: { bot: true },
+      components: [{ components: [{ customId: "self-role:color:set" }] }],
+    },
+  });
+  await handleSelfRoleInteraction(set, fixture);
+  assert.equal(set.events[0].type, "show-modal");
+  assert.equal(set.events[0].modal.data.custom_id, "self-role:color:submit");
+});
+
+test("members can customize and remove only their own permissionless color role", async (t) => {
+  const fixture = makeFixture(t);
+  const setColor = makeInteraction(fixture, {
+    customId: "self-role:color:submit",
+    kind: "modal",
+  });
+  await handleSelfRoleInteraction(setColor, fixture);
+
+  const colorRole = fixture.guild.roles.cache.get("941800000000000088");
+  assert.equal(colorRole.color, 0xefaac9);
+  assert.equal(colorRole.permissions.bitfield, 0n);
+  assert.equal(fixture.member.roles.cache.has(colorRole.id), true);
+  assert.equal(fixture.store.getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], colorRole.id);
+  assert.match(setColor.events.at(-1).payload, /#EFAAC9/);
+
+  const remove = makeInteraction(fixture, {
+    customId: "self-role:color:remove",
+    message: {
+      author: { bot: true },
+      components: [{ components: [{ customId: "self-role:color:remove" }] }],
+    },
+  });
+  await handleSelfRoleInteraction(remove, fixture);
+  assert.equal(fixture.member.roles.cache.has(colorRole.id), false);
+  assert.equal(fixture.store.getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], colorRole.id);
+  assert.match(remove.events.at(-1).payload, /color role was removed/);
+});
+
+test("invalid custom colors and missing role permissions do not assign a role", async (t) => {
+  const fixture = makeFixture(t);
+  const invalid = makeInteraction(fixture, {
+    customId: "self-role:color:submit",
+    kind: "modal",
+  });
+  invalid.fields.getTextInputValue = () => "pink";
+  await handleSelfRoleInteraction(invalid, fixture);
+  assert.match(invalid.events[0].payload.content, /six-digit hex color/);
+  assert.equal(fixture.member.roles.cache.size, 0);
+
+  fixture.guild.members.me.permissions.has = () => false;
+  const denied = makeInteraction(fixture, {
+    customId: "self-role:color:submit",
+    kind: "modal",
+  });
+  await handleSelfRoleInteraction(denied, fixture);
+  assert.match(denied.events.at(-1).payload, /Manage Roles and must rank above/);
+  assert.equal(fixture.member.roles.cache.size, 0);
+
+  fixture.guild.members.me.permissions.has = () => true;
+  const highRole = await fixture.guild.roles.create({
+    name: "existing color",
+    color: 0x123456,
+    permissions: [],
+  });
+  highRole.editable = false;
+  fixture.store.setColorRoleId(GUILD_ID, MEMBER_ID, highRole.id);
+  await fixture.member.roles.add(highRole);
+  const hierarchyDenied = makeInteraction(fixture, {
+    customId: "self-role:color:submit",
+    kind: "modal",
+  });
+  await handleSelfRoleInteraction(hierarchyDenied, fixture);
+  assert.match(hierarchyDenied.events.at(-1).payload, /cannot be safely managed/i);
+  assert.equal(highRole.color, 0x123456);
+  assert.equal(fixture.member.roles.cache.has(highRole.id), true);
+});
+
+test("unrelated private-ticket controls remain separate from the self-role panel", async (t) => {
+  const fixture = makeFixture(t);
+  const interaction = makeInteraction(fixture, { customId: "self-role:ticket-close" });
+  await handleSelfRoleInteraction(interaction, fixture);
+  assert.match(interaction.events[0].payload.content, /not an active Sugar AI review ticket/);
   assert.equal(SELF_ROLE_CHANNEL_NAME.includes("𝓼𝓮𝓵𝓯"), true);
 });

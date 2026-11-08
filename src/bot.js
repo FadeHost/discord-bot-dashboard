@@ -10,6 +10,7 @@ import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { attachMessageDeletionSystem } from "./message-deletion.js";
 import { attachPrivateChatSystem } from "./private-chat-system.js";
 import { attachSelfRoleSystem } from "./self-role-system.js";
+import { attachNsfwVisibilitySystem } from "./nsfw-visibility-system.js";
 import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
 import { createOnboardingService } from "./onboarding.js";
 import { createProfileWelcome, PROFILE_WELCOME_CHANNEL_ID } from "./profile-welcome.js";
@@ -26,6 +27,7 @@ const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf871
  * @param {import("./settings.js").SettingsStore} options.settings
  * @param {import("./private-chat-store.js").PrivateChatStore} options.privateChats
  * @param {import("./self-role-store.js").SelfRoleStore} options.selfRoles
+ * @param {import("./nsfw-visibility-store.js").NsfwVisibilityStore} options.nsfwVisibility
  * @param {import("./moderation-log-store.js").ModerationLogStore} options.moderationLogs
  * @param {import("./onboarding-guide-store.js").OnboardingGuideStore} [options.onboardingGuides]
  * @param {(message: string) => Promise<string>} [options.generateReply]
@@ -39,6 +41,7 @@ export function createBot({
   memory,
   privateChats,
   selfRoles,
+  nsfwVisibility,
   moderationLogs,
   onboardingGuides,
 }) {
@@ -167,6 +170,7 @@ export function createBot({
     lobbyChannelId: PRIVATE_CHAT_LOBBY_CHANNEL_ID,
   });
   attachSelfRoleSystem(client, { store: selfRoles });
+  attachNsfwVisibilitySystem(client, { store: nsfwVisibility });
   attachMessageDeletionSystem(client, { settings, moderationLogs });
 
   client.login(token).catch((error) => {
