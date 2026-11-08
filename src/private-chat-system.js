@@ -15,6 +15,7 @@ import {
 
 import { MAX_PRIVATE_CHAT_MEMBERS } from "./private-chat-store.js";
 import { buildMessageDeletionCommands } from "./message-deletion.js";
+import { buildNsfwVisibilityCommand } from "./nsfw-visibility-system.js";
 import { registerApplicationCommands } from "./command-registry.js";
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { formatPrivateChatChannelName, normalizeCategoryName } from "./private-chat-format.js";
@@ -131,9 +132,9 @@ export function attachPrivateChatSystem(client, { token, applicationId, store, l
       token,
       applicationId,
       guildId: guild.id,
-      commands: buildMessageDeletionCommands(),
+      commands: [...buildMessageDeletionCommands(), buildNsfwVisibilityCommand()],
     }).catch((error) => {
-      console.error(`[commands] could not register message-deletion commands in ${guild.id}: ${error.message}`);
+      console.error(`[commands] could not register guild commands in ${guild.id}: ${error.message}`);
     });
   });
 
@@ -166,7 +167,7 @@ async function initializePrivateChatLobby(client, { token, applicationId, store,
   const guildIds = new Set(client.guilds.cache.keys());
   if (lobby?.guildId) guildIds.add(lobby.guildId);
   for (const guildId of guildIds) {
-    const commands = buildMessageDeletionCommands();
+    const commands = [...buildMessageDeletionCommands(), buildNsfwVisibilityCommand()];
     if (lobby?.type === ChannelType.GuildText && guildId === lobby.guildId) {
       commands.unshift(buildPrivateChatCommand());
     }

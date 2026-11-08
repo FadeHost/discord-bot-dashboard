@@ -125,6 +125,7 @@ clicks to fix and means there is nothing on disk worth stealing.
 /data/memory.json     bounded per-guild, per-user conversation history
 /data/private-chats.json   private-chat owners, invitees, and lobby guide IDs
 /data/onboarding-guide.json the reusable #start onboarding guide message ID
+/data/nsfw-visibility.json member-specific visibility overrides for age-restricted channels
 ```
 
 Production startup requires this file to exist; it will not initialize empty
@@ -138,12 +139,36 @@ startup stops without rewriting it; repair it or restore it from a backup.
 
 The app currently has no database. Its durable application data is
 `settings.json`, `memory.json`, `private-chats.json`, `moderation-logs.json`,
-and `onboarding-guide.json` under `DATA_DIR`.
+`onboarding-guide.json`, `self-roles.json`, and `nsfw-visibility.json` under
+`DATA_DIR`.
 Point `DATA_DIR` at a persistent disk or mounted directory on the host. Outside
 `NODE_ENV=development`, the app only uses an existing `DATA_DIR` or `/data` and
 stops if that storage is unavailable; it never switches to `./data`. Local
 development may fall back to `./data`. A writable path is not necessarily
 persistent, so confirm the chosen disk survives host restarts and redeploys.
+
+## Self-role picker
+
+On startup, the bot provisions the styled self-role channel only in the server
+containing the configured onboarding welcome channel. It reuses the saved
+bot-owned panel message. The five approved categories are Age, Gender,
+Sexuality, Interests, and Color. Individual role options remain disabled until
+they are approved; the bot does not create unapproved option roles.
+
+Self-selected age is never age verification and never grants access to
+age-restricted channels. Color supports a custom six-digit hex value through a
+permissionless personal role, only when the bot has Manage Roles and the role
+hierarchy allows it. Self-role metadata is kept in `self-roles.json`; corrupt
+data stops startup instead of being overwritten.
+
+## NSFW channel visibility
+
+Members can use `/show-hide` with **Show NSFW channels** or **Hide NSFW
+channels**. Sugar only changes the member's View Channel overwrite for channels
+Discord already marks as age-restricted. Showing restores the saved prior
+permission state; it never grants new access or changes Discord's native
+age-restricted setting. The bot needs Manage Channels on each channel it can
+update. Visibility records are kept in `nsfw-visibility.json`.
 
 GitHub `main` stores the source history. To make a portable snapshot of the
 project files and current data, run this from the project directory:
@@ -167,11 +192,12 @@ bash scripts/backup.sh /data/sugar-backups
 ```
 
 The backup includes the project files needed to run the app and each of
-`DATA_DIR/settings.json`, `DATA_DIR/memory.json`, and
-`DATA_DIR/private-chats.json` when present. Missing data files are not created
-or added as empty files. The restore script extracts every archived file,
-including these data files, into a new directory; it does not write to `DATA_DIR`
-or modify the live installation. It refuses to extract into an existing
+`DATA_DIR/settings.json`, `DATA_DIR/memory.json`, `DATA_DIR/private-chats.json`,
+`DATA_DIR/moderation-logs.json`, `DATA_DIR/onboarding-guide.json`, and
+`DATA_DIR/self-roles.json`, and `DATA_DIR/nsfw-visibility.json` when present.
+Missing data files are not created or added as empty files. The restore script
+extracts every archived file, including these data files, into a new directory;
+it does not write to `DATA_DIR` or modify the live installation. It refuses to extract into an existing
 directory. It excludes Git internals, installed packages, temporary caches,
 environment files, and common credential files. Store the downloaded archive
 somewhere separate from the host that runs the bot.

@@ -112,7 +112,7 @@ trap cleanup EXIT
 # credentials from DATA_DIR and avoids recursively archiving an output
 # directory placed under /data for FadeHost's file manager.
 mkdir -p -- "$STAGE/data"
-for DATA_FILE in settings.json memory.json private-chats.json moderation-logs.json onboarding-guide.json; do
+for DATA_FILE in settings.json memory.json private-chats.json moderation-logs.json onboarding-guide.json self-roles.json nsfw-visibility.json; do
   SOURCE="$DATA_DIR/$DATA_FILE"
   if [[ -L "$SOURCE" ]]; then
     echo "$DATA_FILE is a symlink; refusing to back it up." >&2
