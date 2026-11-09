@@ -1,27 +1,37 @@
-import { Events, PermissionFlagsBits, SlashCommandBuilder } from "discord.js";
+import {
+  ActionRowBuilder,
+  Events,
+  PermissionFlagsBits,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+} from "discord.js";
 
-const COMMAND_NAME = "show-hide";
+const CONTROL_ID = "nsfw-visibility:action";
 const SUPPORTED_ACTIONS = new Set(["show", "hide"]);
 
-export function buildNsfwVisibilityCommand() {
-  return new SlashCommandBuilder()
-    .setName(COMMAND_NAME)
-    .setDescription("Show or hide NSFW channels you can already access")
-    .addStringOption((option) =>
-      option
-        .setName("action")
-        .setDescription("Show or hide age-restricted channels")
-        .setRequired(true)
-        .addChoices(
-          { name: "Show NSFW channels", value: "show" },
-          { name: "Hide NSFW channels", value: "hide" },
-        ),
-    )
-    .toJSON();
+export function buildNsfwVisibilityControlRow() {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(CONTROL_ID)
+      .setPlaceholder("Age-restricted channels")
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        new StringSelectMenuOptionBuilder()
+          .setLabel("Show NSFW channels")
+          .setDescription("Restore only your saved access")
+          .setValue("show"),
+        new StringSelectMenuOptionBuilder()
+          .setLabel("Hide NSFW channels")
+          .setDescription("Hide channels you can already access")
+          .setValue("hide"),
+      ),
+  );
 }
 
-export function attachNsfwVisibilitySystem(client, { store }) {
+export function attachNsfwVisibilitySystem(client, { store, selfRoles }) {
   if (!store) throw new Error("An NSFW visibility store is required.");
+  if (!selfRoles) throw new Error("A self-role store is required for the panel control.");
 
   client.on(Events.ChannelDelete, (channel) => {
     if (!channel.guildId) return;
@@ -33,28 +43,46 @@ export function attachNsfwVisibilitySystem(client, { store }) {
   });
 
   client.on(Events.InteractionCreate, (interaction) => {
-    if (!interaction.isChatInputCommand?.() || interaction.commandName !== COMMAND_NAME) return;
-    void handleNsfwVisibilityInteraction(interaction, { store }).catch(async (error) => {
-      console.error(`[nsfw-visibility] command failed in guild ${interaction.guildId ?? "unknown"}`);
+    if (!isNsfwVisibilityControl(interaction)) return;
+    void handleNsfwVisibilityInteraction(interaction, { store, selfRoles, client }).catch(async () => {
+      console.error(`[nsfw-visibility] control failed in guild ${interaction.guildId ?? "unknown"}`);
       await respondEphemeral(interaction, "Sugar could not update NSFW channel visibility. No native age restrictions were changed.");
     });
   });
 }
 
-export async function handleNsfwVisibilityInteraction(interaction, { store }) {
+export function isNsfwVisibilityControl(interaction) {
+  return Boolean(interaction.isStringSelectMenu?.() && interaction.customId === CONTROL_ID);
+}
+
+export async function handleNsfwVisibilityInteraction(interaction, { store, selfRoles, client }) {
   if (!interaction.inGuild?.() || !interaction.guild || !interaction.guildId) {
     return respondEphemeral(interaction, "Show/hide controls can only be used inside the server.");
   }
 
-  const action = interaction.options.getString("action", true);
+  if (!isActivePanelControl(interaction, selfRoles, client)) {
+    return respondEphemeral(interaction, "This self-role panel control is no longer active.");
+  }
+
+  const action = Array.isArray(interaction.values) && interaction.values.length === 1 ? interaction.values[0] : null;
   if (!SUPPORTED_ACTIONS.has(action)) {
-    return respondEphemeral(interaction, "Choose either Show NSFW channels or Hide NSFW channels.");
+    return respondEphemeral(interaction, "Choose one valid show or hide action.");
   }
 
   await interaction.deferReply({ ephemeral: true });
   const member = await interaction.guild.members.fetch(interaction.user.id);
   const result = await applyNsfwVisibility(interaction.guild, member, store, action);
   return interaction.editReply(buildVisibilityResult(action, result));
+}
+
+function isActivePanelControl(interaction, selfRoles, client) {
+  if (!selfRoles?.getGuild || !client?.user?.id) return false;
+  const panel = selfRoles.getGuild(interaction.guildId);
+  return Boolean(
+    panel.channelId === interaction.channelId &&
+      panel.messageId === interaction.message?.id &&
+      interaction.message?.author?.id === client.user.id,
+  );
 }
 
 export async function applyNsfwVisibility(guild, member, store, action) {

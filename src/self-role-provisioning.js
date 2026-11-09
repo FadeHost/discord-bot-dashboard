@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder } from "discord.js";
 
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
+import { buildNsfwVisibilityControlRow } from "./nsfw-visibility-system.js";
 import {
   SELF_ROLE_CATEGORIES,
   SELF_ROLE_CHANNEL_NAME,
@@ -201,6 +202,8 @@ export function buildSelfRolePickerPayload() {
       [
         "Choose one of the five approved categories below. Your role options are waiting for approval, so no unapproved role choices are active.",
         "",
+        "Use the age-restricted channels menu below to show or hide channels you can already access.",
+        "",
         "Any future age role will be self-declared only. It will never verify age, grant age-restricted access, or change Discord's native channel restrictions.",
         "",
         "Color lets you enter a custom hex value. Sugar only creates or updates a permissionless color role when it can safely manage that role.",
@@ -230,7 +233,7 @@ export function buildSelfRolePickerPayload() {
 
   return {
     embeds: [embed],
-    components: [row],
+    components: [row, buildNsfwVisibilityControlRow()],
     allowedMentions: { parse: [] },
   };
 }

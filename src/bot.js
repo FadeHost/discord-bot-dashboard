@@ -170,7 +170,7 @@ export function createBot({
     lobbyChannelId: PRIVATE_CHAT_LOBBY_CHANNEL_ID,
   });
   attachSelfRoleSystem(client, { store: selfRoles });
-  attachNsfwVisibilitySystem(client, { store: nsfwVisibility });
+  attachNsfwVisibilitySystem(client, { store: nsfwVisibility, selfRoles });
   attachMessageDeletionSystem(client, { settings, moderationLogs });
 
   client.login(token).catch((error) => {
