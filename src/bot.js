@@ -15,6 +15,11 @@ import { PRIVATE_CHAT_LOBBY_CHANNEL_ID } from "./private-chat-format.js";
 import { createOnboardingService } from "./onboarding.js";
 import { createProfileWelcome, PROFILE_WELCOME_CHANNEL_ID } from "./profile-welcome.js";
 import { renderWelcome } from "./settings.js";
+import {
+  ensureJoinRoleVisibility,
+  invalidateJoinRoleVisibility,
+  JOIN_ROLE_ID,
+} from "./join-role-access.js";
 
 const COLORS = { join: 0x4ade80, leave: 0xf87171, edit: 0xfbbf24, delete: 0xf87171 };
 
@@ -69,6 +74,17 @@ export function createBot({
       console.error(`[onboarding] setup failed (${error?.code ?? "unknown error"})`);
     });
   });
+  client.once(Events.ClientReady, () => {
+    for (const guild of client.guilds.cache.values()) {
+      if (guild.roles.cache.has(JOIN_ROLE_ID)) void ensureJoinRoleVisibility(guild);
+    }
+  });
+
+  client.on(Events.ChannelCreate, (channel) => {
+    if (!channel.guild?.roles.cache.has(JOIN_ROLE_ID)) return;
+    invalidateJoinRoleVisibility(channel.guild.id);
+    void ensureJoinRoleVisibility(channel.guild);
+  });
 
   if (generateReply) {
     client.on(
@@ -113,6 +129,19 @@ export function createBot({
 
   client.on(Events.ChannelDelete, (channel) => {
     onboarding.invalidateGuild(channel.guildId);
+    if (!channel.guild?.roles.cache.has(JOIN_ROLE_ID)) return;
+    invalidateJoinRoleVisibility(channel.guild.id);
+    void ensureJoinRoleVisibility(channel.guild);
+  });
+
+  client.on(Events.GuildRoleUpdate, (_before, role) => {
+    if (role.id !== JOIN_ROLE_ID) return;
+    invalidateJoinRoleVisibility(role.guild.id);
+    void ensureJoinRoleVisibility(role.guild, role);
+  });
+
+  client.on(Events.GuildRoleDelete, (role) => {
+    if (role.id === JOIN_ROLE_ID) invalidateJoinRoleVisibility(role.guild.id);
   });
 
   client.on(Events.GuildMemberRemove, async (member) => {
@@ -197,31 +226,37 @@ export function createBot({
   return client;
 }
 
-export async function assignNewMemberRole(member) {
+export async function assignNewMemberRole(member, ensureVisibility = ensureJoinRoleVisibility) {
   const guildId = member?.guild?.id ?? "unknown";
 
   try {
     let roles = member.guild.roles.cache;
-    let newRole = [...roles.values()].find((role) => role.name === "new");
+    let newRole = roles.get?.(JOIN_ROLE_ID) ??
+      [...roles.values()].find((role) => role.id === JOIN_ROLE_ID);
     if (!newRole && typeof member.guild.roles.fetch === "function") {
       roles = await member.guild.roles.fetch();
-      newRole = [...roles.values()].find((role) => role.name === "new");
+      newRole = roles.get?.(JOIN_ROLE_ID) ??
+        [...roles.values()].find((role) => role.id === JOIN_ROLE_ID);
     }
     if (!newRole) {
-      console.error(`[bot] the role "new" was not found in guild ${guildId}`);
+      console.error(`[bot] the join role was not found in guild ${guildId}`);
+      return false;
+    }
+    if (!await ensureVisibility(member.guild, newRole)) {
+      console.error(`[bot] the join role could not be safely limited in guild ${guildId}; it was not assigned`);
       return false;
     }
     if (member.roles.cache.has(newRole.id)) return true;
 
-    await member.roles.add(newRole, "Automatically assign the new role to new members");
+    await member.roles.add(newRole, "Automatically assign the join role to new members");
     return true;
   } catch (error) {
     if (String(error?.code) === "50013") {
       console.error(
-        `[bot] could not assign the role "new" in guild ${guildId}: check Manage Roles permission and role hierarchy`,
+        `[bot] could not assign the join role in guild ${guildId}: check Manage Roles permission and role hierarchy`,
       );
     } else {
-      console.error(`[bot] could not assign the role "new" in guild ${guildId} (${error?.code ?? "unknown error"})`);
+      console.error(`[bot] could not assign the join role in guild ${guildId} (${error?.code ?? "unknown error"})`);
     }
     return false;
   }

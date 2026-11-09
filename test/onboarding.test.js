@@ -15,10 +15,11 @@ import {
   PINK_CHECK_EMOJI,
   PINK_CHECK_EMOJI_ID,
 } from "../src/onboarding.js";
+import { JOIN_ROLE_ID } from "../src/join-role-access.js";
 
 const GUILD_ID = "941800000000000410";
 const MEMBER_ID = "941800000000000411";
-const NEW_ROLE_ID = "941800000000000412";
+const NEW_ROLE_ID = JOIN_ROLE_ID;
 const MEMBER_ROLE_ID = "941800000000000413";
 const BOT_ID = "941800000000000414";
 const STYLED_CHANNEL_NAMES = {
@@ -300,6 +301,20 @@ test("verification adds member before removing new", async () => {
   assert.deepEqual(calls.map(({ action }) => action), ["add", "remove"]);
   assert.equal(member.roles.cache.has(MEMBER_ROLE_ID), true);
   assert.equal(member.roles.cache.has(NEW_ROLE_ID), false);
+});
+
+test("verification finds the join role by its configured ID, not its display name", async () => {
+  const customJoinRole = { id: JOIN_ROLE_ID, name: "Onboarding access" };
+  const { guild, calls, member } = makeGuild({
+    roles: [customJoinRole, { id: MEMBER_ROLE_ID, name: "member" }],
+  });
+  guild.members.fetch = async () => member;
+
+  assert.equal(await completeOnboardingVerification(guild, MEMBER_ID), true);
+  assert.deepEqual(calls.map(({ action, role }) => [action, role.id]), [
+    ["add", MEMBER_ROLE_ID],
+    ["remove", JOIN_ROLE_ID],
+  ]);
 });
 
 test("verification does not remove new if adding member fails", async () => {

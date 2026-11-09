@@ -1,6 +1,7 @@
 import { ChannelType, EmbedBuilder } from "discord.js";
 
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
+import { JOIN_ROLE_ID } from "./join-role-access.js";
 
 export const ONBOARDING_CHANNEL_ID = "1567716077885071410";
 export const PINK_CHECK_EMOJI_ID = "1568487503051235430";
@@ -247,16 +248,16 @@ export function buildOnboardingGuidePayload({ channels }) {
 export async function completeOnboardingVerification(guild, userId) {
   try {
     let roles = guild.roles.cache;
-    let newRole = findRole(roles, "new");
+    let newRole = findJoinRole(roles);
     let memberRole = findRole(roles, "member");
     if ((!newRole || !memberRole) && typeof guild.roles.fetch === "function") {
       roles = await guild.roles.fetch();
-      newRole = findRole(roles, "new");
+      newRole = findJoinRole(roles);
       memberRole = findRole(roles, "member");
     }
 
     if (!newRole || !memberRole || newRole.id === memberRole.id) {
-      console.error(`[onboarding] guild ${guild.id} needs distinct roles named "new" and "member"`);
+      console.error(`[onboarding] guild ${guild.id} needs distinct join and member roles`);
       return false;
     }
 
@@ -458,6 +459,11 @@ function isManagedStartGuide(message, botId) {
 
 function findRole(roles, name) {
   return [...(roles?.values?.() ?? [])].find((role) => role.name === name);
+}
+
+function findJoinRole(roles) {
+  return roles?.get?.(JOIN_ROLE_ID) ??
+    [...(roles?.values?.() ?? [])].find((role) => role.id === JOIN_ROLE_ID);
 }
 
 async function resolvePinkCheckEmoji(client, guild) {
