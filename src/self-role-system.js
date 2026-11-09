@@ -23,7 +23,19 @@ import {
   getSelfRoleCategory,
   getSelfRoleDefinition,
 } from "./self-role-catalog.js";
-import { isSelfRoleChannelName, MAX_GUILD_ROLES, provisionSelfRoleGuild } from "./self-role-provisioning.js";
+import {
+  buildAgeSelectionRow,
+  isSelfRoleChannelName,
+  MAX_GUILD_ROLES,
+  provisionSelfRoleGuild,
+} from "./self-role-provisioning.js";
+import { applyNsfwVisibility, buildVisibilityResult } from "./nsfw-visibility-system.js";
+import {
+  applyUnderageAccess,
+  buildUnderageNoticeEmbed,
+  ensureSupportChannel,
+  restoreUnderageAccess,
+} from "./underage-access.js";
 
 const MEMBER_ROLE_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
@@ -46,8 +58,9 @@ const channelSetupQueues = new Map();
 const roleSelectionQueues = new Map();
 const ticketCreationQueues = new Map();
 
-export function attachSelfRoleSystem(client, { store }) {
+export function attachSelfRoleSystem(client, { store, nsfwVisibility }) {
   if (!store) throw new Error("A self-role store is required.");
+  if (!nsfwVisibility) throw new Error("An NSFW visibility store is required.");
 
   let readyHandled = false;
   let targetGuildId = null;
@@ -90,9 +103,21 @@ export function attachSelfRoleSystem(client, { store }) {
 
   client.on(Events.InteractionCreate, (interaction) => {
     if (!isSelfRoleInteraction(interaction)) return;
-    void handleSelfRoleInteraction(interaction, { client, store }).catch(async (error) => {
+    void handleSelfRoleInteraction(interaction, { client, store, nsfwVisibility }).catch(async (error) => {
       console.error(`[self-roles] interaction failed in guild ${interaction.guildId ?? "unknown"}: ${error.message}`);
       await replyWithError(interaction, safeErrorMessage(error));
+    });
+  });
+
+  client.on(Events.MessageReactionAdd, (reaction, user) => {
+    void handleSelfRoleReaction(reaction, user, { store, nsfwVisibility }, "add").catch((error) => {
+      console.error(`[self-roles] reaction add failed: ${error.message}`);
+    });
+  });
+
+  client.on(Events.MessageReactionRemove, (reaction, user) => {
+    void handleSelfRoleReaction(reaction, user, { store, nsfwVisibility }, "remove").catch((error) => {
+      console.error(`[self-roles] reaction removal failed: ${error.message}`);
     });
   });
 }
@@ -152,40 +177,10 @@ export function buildSelfRoleSelectionRow(categoryKey, roleIds, member) {
   const category = getSelfRoleCategory(categoryKey);
   if (!category) throw new Error("That self-role category is not available.");
   if (!category.options.length) throw new Error("Role choices for this category are waiting for approval.");
-
-  let hasSingleDefault = false;
-  const options = category.options.map((option) => {
-    const definition = getSelfRoleDefinition(`${category.key}:${option.key}`);
-    const roleId = roleIds[definition.key];
-    const item = new StringSelectMenuOptionBuilder()
-      .setLabel(toRoyalBold(option.label))
-      .setValue(option.key);
-    const selected = roleId && member?.roles?.cache?.has?.(roleId);
-    if (selected && (category.selection === "multiple" || !hasSingleDefault)) {
-      item.setDefault(true);
-      hasSingleDefault = true;
-    }
-    if (option.description) item.setDescription(toRoyalBold(option.description));
-    if (option.hex) item.setDescription(option.hex);
-    return item;
-  });
-
-  if (category.selection === "single") {
-    options.push(
-      new StringSelectMenuOptionBuilder()
-        .setLabel(toRoyalBold("Clear selection"))
-        .setValue(SELF_ROLE_CLEAR_VALUE),
-    );
+  if (categoryKey !== "age") {
+    throw new Error("Role choices for this category are waiting for your approval.");
   }
-
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(`${SELF_ROLE_PREFIX}select:${category.key}`)
-    .setPlaceholder(toRoyalBold(`Choose ${category.label}`))
-    .setMinValues(category.selection === "single" ? 1 : 0)
-    .setMaxValues(category.selection === "single" ? 1 : category.options.length)
-    .addOptions(options);
-
-  return new ActionRowBuilder().addComponents(menu);
+  return buildAgeSelectionRow(roleIds, member);
 }
 
 export function buildReviewTicketPermissionOverwrites({ everyoneId, memberId, staffRoleId, botId }) {
@@ -236,7 +231,7 @@ export function buildReviewTicketPayload(memberId, staffRoleId) {
   };
 }
 
-export async function handleSelfRoleInteraction(interaction, { client, store }) {
+export async function handleSelfRoleInteraction(interaction, { client, store, nsfwVisibility }) {
   if (!interaction.inGuild?.() || !interaction.guild || !interaction.guildId) {
     return replyEphemeral(interaction, "Self-roles can only be used inside the server.");
   }
@@ -245,30 +240,20 @@ export async function handleSelfRoleInteraction(interaction, { client, store }) 
     if (interaction.customId === `${SELF_ROLE_PREFIX}ticket-close`) {
       return closeReviewTicket(interaction, { client, store });
     }
-    if (interaction.customId === `${SELF_ROLE_PREFIX}color:set`) {
-      const config = store.getGuild(interaction.guildId);
-      if (!isActiveColorControl(interaction, config)) {
-        return replyEphemeral(interaction, "This color control is no longer active.");
-      }
-      return interaction.showModal(buildColorCustomizationModal());
-    }
-    if (interaction.customId === `${SELF_ROLE_PREFIX}color:remove`) {
-      return removeMemberColor(interaction, { store });
-    }
-    const match = interaction.customId.match(/^self-role:open:([a-z-]+)$/u);
-    if (match) return openCategoryPicker(interaction, { client, store }, match[1]);
     return replyEphemeral(interaction, "That self-role control is not available.");
   }
 
   if (interaction.isStringSelectMenu?.()) {
     const match = interaction.customId.match(/^self-role:select:([a-z-]+)$/u);
-    if (match) return submitCategorySelection(interaction, { client, store }, match[1]);
+    if (match) {
+      return submitCategorySelection(interaction, { client, store, nsfwVisibility }, match[1]);
+    }
   }
   if (
     interaction.isModalSubmit?.() &&
     interaction.customId === `${SELF_ROLE_PREFIX}color:submit`
   ) {
-    return setMemberColor(interaction, { store });
+    return replyEphemeral(interaction, "Color options are inactive until they are approved.");
   }
 
   return replyEphemeral(interaction, "That self-role control is not available.");
@@ -280,6 +265,47 @@ export function isSelfRoleInteraction(interaction) {
       typeof interaction.customId === "string" &&
       interaction.customId.startsWith(SELF_ROLE_PREFIX),
   );
+}
+
+export async function handleSelfRoleReaction(reaction, user, { store, nsfwVisibility }, action) {
+  if (!["add", "remove"].includes(action) || !user || user.bot) return false;
+  if (reaction?.partial) reaction = await reaction.fetch();
+  if (reaction?.message?.partial) reaction.message = await reaction.message.fetch();
+  if (user.partial) user = await user.fetch();
+
+  const message = reaction?.message;
+  const guild = message?.guild;
+  const guildId = message?.guildId ?? guild?.id;
+  if (!guild || !guildId || !message.id) return false;
+  if (store.getReactionMapping(guildId, message.id, reaction.emoji?.name) !== "hide-nsfw") {
+    return false;
+  }
+
+  const member = await guild.members.fetch(user.id);
+  return runQueued(roleSelectionQueues, `${guildId}:${member.id}`, async () => {
+    const selected = action === "add";
+    store.setHideChannelsSelection(guildId, member.id, selected);
+    const configuredAge = store.getAgeSelection(guildId, member.id);
+    const roleAge = getSelfRoleCategory("age").options.find((option) =>
+      member.roles.cache.has(store.getGuild(guildId).roleIds[`age:${option.key}`]),
+    )?.key;
+    if (configuredAge === "under-18" || roleAge === "under-18") {
+      return { underage: true, selected };
+    }
+
+    const result = await applyNsfwVisibility(
+      guild,
+      member,
+      nsfwVisibility,
+      selected ? "hide" : "show",
+    );
+    if (result.failed) {
+      console.warn(
+        `[self-roles] Hide Channels could not update ${result.failed} channel(s) in guild ${guildId}`,
+      );
+    }
+    return { underage: false, selected, result };
+  });
 }
 
 export async function applySelfRoleSelection(member, guild, store, categoryKey, selectedValues) {
@@ -333,6 +359,12 @@ export function validateSelfRoleSelection(categoryKey, selectedValues) {
 
   const selected = new Set(selectedValues);
   if (selected.size !== selectedValues.length) throw new Error("Duplicate role choices were rejected.");
+  if (category.key === "age") {
+    if (selected.size !== 1 || [...selected].some((value) => !category.options.some((option) => option.key === value))) {
+      throw new Error("Choose exactly one approved age option.");
+    }
+    return selected;
+  }
   if (category.selection === "single") {
     if (
       selected.size > 1 ||
@@ -460,31 +492,149 @@ async function openCategoryPicker(interaction, { client, store }, categoryKey) {
   }
 }
 
-async function submitCategorySelection(interaction, { client, store }, categoryKey) {
+async function submitCategorySelection(interaction, { client, store, nsfwVisibility }, categoryKey) {
   const category = getSelfRoleCategory(categoryKey);
   const config = store.getGuild(interaction.guildId);
-  if (!category || interaction.channelId !== config.channelId) {
+  if (
+    categoryKey !== "age" ||
+    !category ||
+    interaction.channelId !== config.channelId ||
+    interaction.message?.id !== config.panelMessageIds?.age ||
+    interaction.message?.author?.id !== client.user?.id
+  ) {
     return replyEphemeral(interaction, "That self-role control is no longer active.");
   }
+  if (interaction.user?.bot) return replyEphemeral(interaction, "Bots cannot select self-roles.");
 
-  await interaction.deferUpdate();
+  await interaction.deferReply({ ephemeral: true });
   try {
     const member = await resolveGuildMember(interaction);
     const values = Array.isArray(interaction.values) ? interaction.values : [];
     validateSelfRoleSelection(categoryKey, values);
-    let ticket = null;
-    if (categoryKey === "age" && values.includes("under-18")) {
-      ticket = await ensureReviewTicket(interaction, { client, store });
-    }
+    const selectedKey = values[0];
+    const outcome = await runQueued(roleSelectionQueues, `${interaction.guildId}:${member.id}`, async () => {
+      const configuredSelection = store.getAgeSelection(interaction.guildId, member.id);
+      const roleSelection = getSelfRoleCategory("age").options.find((option) =>
+        member.roles.cache.has(config.roleIds[`age:${option.key}`]),
+      )?.key;
+      const previousKey = configuredSelection ?? roleSelection ?? null;
+      const wasUnderage = previousKey === "under-18" || roleSelection === "under-18";
 
-    const result = await runQueued(roleSelectionQueues, `${interaction.guildId}:${member.id}:${categoryKey}`, () =>
-      applySelfRoleSelection(member, interaction.guild, store, categoryKey, values),
-    );
-    const response = buildSelectionResult(category, result, ticket);
-    return interaction.editReply({ content: response, components: [] });
+      const result = await applySelfRoleSelection(member, interaction.guild, store, "age", values);
+      store.setAgeSelection(interaction.guildId, member.id, selectedKey);
+
+      if (selectedKey === "under-18") {
+        let supportChannel = null;
+        let restrictionResult = null;
+        let restrictionError = null;
+        let dmSent = false;
+        try {
+          supportChannel = await ensureSupportChannel(interaction.guild);
+          restrictionResult = await applyUnderageAccess(
+            interaction.guild,
+            member,
+            supportChannel,
+            store,
+          );
+        } catch (error) {
+          restrictionError = safeErrorMessage(error);
+        }
+
+        if (!wasUnderage && supportChannel) {
+          try {
+            await member.user.send({
+              embeds: [
+                buildUnderageNoticeEmbed(supportChannel, {
+                  permissionFailures:
+                    (restrictionResult?.failed ?? 0) + (restrictionError ? 1 : 0),
+                  supportAvailable: restrictionResult?.supportAvailable === true,
+                }),
+              ],
+              allowedMentions: { parse: [] },
+            });
+            dmSent = true;
+          } catch {
+            dmSent = false;
+          }
+        }
+
+        return {
+          result,
+          selectedKey,
+          wasUnderage,
+          supportChannel,
+          restrictionResult,
+          restrictionError,
+          dmSent,
+        };
+      }
+
+      let restoredAccess = null;
+      let restoreError = null;
+      let nsfwResult = null;
+      if (wasUnderage) {
+        try {
+          restoredAccess = await restoreUnderageAccess(interaction.guild, member, store);
+        } catch (error) {
+          restoreError = safeErrorMessage(error);
+        }
+        const hidePreference = store.getHideChannelsSelection(interaction.guildId, member.id);
+        if (hidePreference !== null) {
+          try {
+            nsfwResult = await applyNsfwVisibility(
+              interaction.guild,
+              member,
+              nsfwVisibility,
+              hidePreference ? "hide" : "show",
+            );
+          } catch (error) {
+            restoreError ??= safeErrorMessage(error);
+          }
+        }
+      }
+      return { result, selectedKey, restoredAccess, restoreError, nsfwResult };
+    });
+
+    const response = buildAgeSelectionResult(outcome);
+    return interaction.editReply({ content: response, allowedMentions: { parse: [] } });
   } catch (error) {
-    return interaction.editReply({ content: safeErrorMessage(error), components: [] });
+    return interaction.editReply({ content: safeErrorMessage(error), allowedMentions: { parse: [] } });
   }
+}
+
+function buildAgeSelectionResult(outcome) {
+  if (outcome.selectedKey === "under-18") {
+    const failures = outcome.restrictionResult?.failed ?? 0;
+    const messages = [
+      "Your 18- Age role is set. Age is self-declared, not age verification.",
+    ];
+    if (outcome.restrictionResult?.supportAvailable) {
+      messages.push(`Open a support ticket in <#${outcome.supportChannel.id}>.`);
+    } else {
+      messages.push("The bot could not confirm access to #support, so it did not restrict your other channels. Contact a server administrator.");
+    }
+    if (outcome.restrictionError) {
+      messages.push(`Channel restrictions need administrator attention: ${outcome.restrictionError}`);
+    } else if (failures) {
+      messages.push(`${failures} channel permission update(s) need administrator attention.`);
+    }
+    if (!outcome.wasUnderage && outcome.supportChannel) {
+      messages.push(
+        outcome.dmSent
+          ? "I sent you a private Discord message with the details."
+          : "I could not send a DM, so these instructions are shown only in this private reply.",
+      );
+    }
+    return messages.join(" ");
+  }
+
+  const failures =
+    (outcome.restoredAccess?.failed ?? 0) +
+    (outcome.nsfwResult?.failed ?? 0) +
+    (outcome.restoreError ? 1 : 0);
+  return failures
+    ? `Your Age role is updated. Some channel visibility could not be restored; an administrator should review the permissions.`
+    : `Your Age role is updated to ${toRoyalBold(outcome.selectedKey)}.`;
 }
 
 export function buildColorCustomizationRow() {

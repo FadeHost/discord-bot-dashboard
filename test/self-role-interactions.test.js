@@ -5,12 +5,18 @@ import path from "node:path";
 import test from "node:test";
 import { ChannelType, Collection, PermissionFlagsBits } from "discord.js";
 
-import { SELF_ROLE_CATEGORIES, SELF_ROLE_CHANNEL_NAME } from "../src/self-role-catalog.js";
 import {
+  HIDE_CHANNELS_EMOJI,
+  SELF_ROLE_CATEGORIES,
+  SELF_ROLE_CHANNEL_NAME,
+} from "../src/self-role-catalog.js";
+import {
+  handleSelfRoleReaction,
   handleSelfRoleInteraction,
   isSelfRoleInteraction,
 } from "../src/self-role-system.js";
 import { SelfRoleStore } from "../src/self-role-store.js";
+import { NsfwVisibilityStore } from "../src/nsfw-visibility-store.js";
 
 const GUILD_ID = "941800000000000001";
 const MEMBER_ID = "941800000000000002";
@@ -63,12 +69,65 @@ function makeFixture(t, { initialRoles = [] } = {}) {
   roleCache.set(STAFF_ROLE_ID, staffRole);
   store.setRoleId(GUILD_ID, "staff", STAFF_ROLE_ID);
   store.setChannel(GUILD_ID, PANEL_CHANNEL_ID, PANEL_MESSAGE_ID);
+  store.setReactionPanelMessage(GUILD_ID, "age", PANEL_CHANNEL_ID, PANEL_MESSAGE_ID);
 
   const ticketChannels = new Map();
   const createdTicketOptions = [];
   const ticketMessages = [];
   const permissionEdits = [];
+  const underageChannels = new Collection();
+  const dmPayloads = [];
+  const accessFlags = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.ReadMessageHistory,
+  ];
   let nextChannelId = 200;
+  const generalChannel = {
+    id: "941800000000000090",
+    guildId: GUILD_ID,
+    name: "general",
+    type: ChannelType.GuildText,
+    nsfw: false,
+    permissionOverwrites: {
+      cache: new Collection(),
+      edit: async (userId, patch) => {
+        permissionEdits.push([generalChannel.id, userId, patch]);
+        const overwrites = generalChannel.permissionOverwrites.cache;
+        const current = overwrites.get(userId) ?? { allow: permissionBits(), deny: permissionBits() };
+        const allow = new Set(accessFlags.filter((flag) => current.allow.has(flag)));
+        const deny = new Set(accessFlags.filter((flag) => current.deny.has(flag)));
+        for (const [name, value] of Object.entries(patch)) {
+          const flag = PermissionFlagsBits[name];
+          if (value === null) {
+            allow.delete(flag);
+            deny.delete(flag);
+          } else if (value === true) {
+            allow.add(flag);
+            deny.delete(flag);
+          } else if (value === false) {
+            deny.add(flag);
+            allow.delete(flag);
+          }
+        }
+        if (allow.size || deny.size) {
+          overwrites.set(userId, { allow: permissionBits([...allow]), deny: permissionBits([...deny]) });
+        } else {
+          overwrites.delete(userId);
+        }
+      },
+    },
+    permissionsFor: (target) => ({
+      has: (flag) => {
+        if (target.id === BOT_ID) return flag === PermissionFlagsBits.ManageChannels;
+        const overwrite = generalChannel.permissionOverwrites.cache.get(MEMBER_ID);
+        if (overwrite?.deny.has(flag)) return false;
+        if (overwrite?.allow.has(flag)) return true;
+        return accessFlags.includes(flag);
+      },
+    }),
+  };
+  underageChannels.set(generalChannel.id, generalChannel);
   const guild = {
     id: GUILD_ID,
     ownerId: "941800000000000099",
@@ -93,12 +152,66 @@ function makeFixture(t, { initialRoles = [] } = {}) {
       },
     },
     members: {
-      me: { permissions: { has: (flag) => flag === PermissionFlagsBits.ManageRoles } },
+      me: {
+        id: BOT_ID,
+        permissions: {
+          has: (flag) => [PermissionFlagsBits.ManageRoles, PermissionFlagsBits.ManageChannels].includes(flag),
+        },
+      },
       fetch: async (id) => (id === MEMBER_ID ? member : staffMember),
     },
     channels: {
-      fetch: async (id) => ticketChannels.get(id) ?? null,
+      fetch: async (id) =>
+        id ? ticketChannels.get(id) ?? underageChannels.get(id) ?? null : underageChannels,
       create: async (options) => {
+        if (options.name === "support") {
+          const channel = {
+            id: `941800000000000${String(nextChannelId++).padStart(3, "0")}`,
+            guildId: GUILD_ID,
+            name: options.name,
+            type: ChannelType.GuildText,
+            nsfw: false,
+            permissionOverwrites: {
+              cache: new Collection(),
+              edit: async (userId, patch) => {
+                permissionEdits.push([channel.id, userId, patch]);
+                const overwrites = channel.permissionOverwrites.cache;
+                const current = overwrites.get(userId) ?? { allow: permissionBits(), deny: permissionBits() };
+                const allow = new Set(accessFlags.filter((flag) => current.allow.has(flag)));
+                const deny = new Set(accessFlags.filter((flag) => current.deny.has(flag)));
+                for (const [name, value] of Object.entries(patch)) {
+                  const flag = PermissionFlagsBits[name];
+                  if (value === null) {
+                    allow.delete(flag);
+                    deny.delete(flag);
+                  } else if (value === true) {
+                    allow.add(flag);
+                    deny.delete(flag);
+                  } else if (value === false) {
+                    deny.add(flag);
+                    allow.delete(flag);
+                  }
+                }
+                if (allow.size || deny.size) {
+                  overwrites.set(userId, { allow: permissionBits([...allow]), deny: permissionBits([...deny]) });
+                } else {
+                  overwrites.delete(userId);
+                }
+              },
+            },
+            permissionsFor: (target) => ({
+              has: (flag) => {
+                if (target.id === BOT_ID) return flag === PermissionFlagsBits.ManageChannels;
+                const overwrite = channel.permissionOverwrites.cache.get(MEMBER_ID);
+                if (overwrite?.deny.has(flag)) return false;
+                if (overwrite?.allow.has(flag)) return true;
+                return false;
+              },
+            }),
+          };
+          underageChannels.set(channel.id, channel);
+          return channel;
+        }
         createdTicketOptions.push(options);
         const channel = {
           id: `941800000000000${String(nextChannelId++).padStart(3, "0")}`,
@@ -144,7 +257,17 @@ function makeFixture(t, { initialRoles = [] } = {}) {
         for (const role of Array.isArray(values) ? values : [values]) cache.delete(role.id);
       },
     };
-    return { id, guild, roles };
+    return {
+      id,
+      guild,
+      roles,
+      permissions: { has: () => false },
+      user: {
+        send: async (payload) => {
+          dmPayloads.push(payload);
+        },
+      },
+    };
   };
   const member = makeMember(MEMBER_ID, initialRoles);
   const staffMember = makeMember(OTHER_ID);
@@ -160,6 +283,9 @@ function makeFixture(t, { initialRoles = [] } = {}) {
     createdTicketOptions,
     ticketMessages,
     permissionEdits,
+    underageChannels,
+    dmPayloads,
+    nsfwVisibility: new NsfwVisibilityStore(directory),
     client: { user: { id: BOT_ID } },
   };
 }
@@ -215,7 +341,7 @@ function makeInteraction(fixture, {
   return interaction;
 }
 
-test("category buttons state that role choices await approval and reject stale panels", async (t) => {
+test("unapproved category buttons stay inactive and stale controls are rejected", async (t) => {
   const fixture = makeFixture(t);
   const interaction = makeInteraction(fixture, { customId: "self-role:open:gender" });
 
@@ -223,7 +349,7 @@ test("category buttons state that role choices await approval and reject stale p
   await handleSelfRoleInteraction(interaction, fixture);
 
   assert.equal(interaction.events[0].payload.ephemeral, true);
-  assert.match(interaction.events[0].payload.content, /waiting for your approval/i);
+  assert.match(interaction.events[0].payload.content, /not available/i);
   assert.equal(fixture.member.roles.cache.size, 0);
 
   const wrongChannel = makeInteraction(fixture, {
@@ -231,7 +357,7 @@ test("category buttons state that role choices await approval and reject stale p
     channelId: "941800000000000098",
   });
   await handleSelfRoleInteraction(wrongChannel, fixture);
-  assert.match(wrongChannel.events[0].payload.content, /no longer active/);
+  assert.match(wrongChannel.events[0].payload.content, /not available/i);
 });
 
 test("forged multi-select values cannot assign any unapproved role", async (t) => {
@@ -243,12 +369,12 @@ test("forged multi-select values cannot assign any unapproved role", async (t) =
   });
 
   await handleSelfRoleInteraction(interaction, fixture);
-  assert.equal(interaction.events[0].type, "defer-update");
-  assert.match(interaction.events.at(-1).payload.content, /not part of the approved list/i);
+  assert.equal(interaction.events[0].payload.ephemeral, true);
+  assert.match(interaction.events[0].payload.content, /no longer active/i);
   assert.equal(fixture.member.roles.cache.size, 0);
 });
 
-test("unapproved age options cannot create tickets, assign roles, or verify age", async (t) => {
+test("a forged multi-age selection is rejected without changing roles or opening tickets", async (t) => {
   const fixture = makeFixture(t);
   const interaction = makeInteraction(fixture, {
     customId: "self-role:select:age",
@@ -260,18 +386,132 @@ test("unapproved age options cannot create tickets, assign roles, or verify age"
   assert.equal(fixture.createdTicketOptions.length, 0);
   assert.equal(fixture.member.roles.cache.size, 0);
   assert.equal(fixture.store.getOpenTicket(GUILD_ID, MEMBER_ID), null);
-  assert.match(interaction.events.at(-1).payload.content, /approved option/i);
+  assert.equal(interaction.events[0].type, "defer-reply");
+  assert.equal(interaction.events[0].options.ephemeral, true);
+  assert.match(interaction.events.at(-1).payload.content, /exactly one approved age option/i);
 });
 
-test("color category offers a custom color modal and a removal control", async (t) => {
+test("age choices replace the prior role and 18- restrictions restore after changing age", async (t) => {
+  const fixture = makeFixture(t);
+  const underage = makeInteraction(fixture, {
+    customId: "self-role:select:age",
+    kind: "select",
+    values: ["under-18"],
+  });
+
+  await handleSelfRoleInteraction(underage, fixture);
+  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["age:under-18"]), true);
+  assert.equal(fixture.store.getAgeSelection(GUILD_ID, MEMBER_ID), "under-18");
+  assert.equal(
+    fixture.underageChannels.get("941800000000000090")
+      .permissionsFor(fixture.member)
+      .has(PermissionFlagsBits.ViewChannel),
+    false,
+  );
+  const support = [...fixture.underageChannels.values()].find(({ name }) => name === "support");
+  assert.equal(support.permissionsFor(fixture.member).has(PermissionFlagsBits.ViewChannel), true);
+  assert.equal(fixture.dmPayloads.length, 1);
+  assert.equal(fixture.dmPayloads[0].embeds[0].data.color, 0xf472b6);
+  assert.match(fixture.dmPayloads[0].embeds[0].data.description, /open a support ticket/i);
+
+  const adult = makeInteraction(fixture, {
+    customId: "self-role:select:age",
+    kind: "select",
+    values: ["18"],
+  });
+  await handleSelfRoleInteraction(adult, fixture);
+  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["age:under-18"]), false);
+  assert.equal(fixture.member.roles.cache.has(fixture.roleIds["age:18"]), true);
+  assert.equal(fixture.store.getAgeSelection(GUILD_ID, MEMBER_ID), "18");
+  assert.equal(
+    fixture.underageChannels.get("941800000000000090")
+      .permissionsFor(fixture.member)
+      .has(PermissionFlagsBits.ViewChannel),
+    true,
+  );
+  assert.equal(fixture.store.getUnderageAccess(GUILD_ID, MEMBER_ID), null);
+  assert.equal(fixture.dmPayloads.length, 1);
+});
+
+test("Hide Channels reactions persist across an under-18 selection and restore on removal", async (t) => {
+  const fixture = makeFixture(t);
+  const channel = fixture.underageChannels.get("941800000000000090");
+  const hidePanelMessageId = "941800000000000015";
+  channel.nsfw = true;
+  fixture.store.setReactionPanelMessage(
+    GUILD_ID,
+    "hide-channels",
+    PANEL_CHANNEL_ID,
+    hidePanelMessageId,
+    { [HIDE_CHANNELS_EMOJI]: "hide-nsfw" },
+  );
+
+  await handleSelfRoleInteraction(
+    makeInteraction(fixture, {
+      customId: "self-role:select:age",
+      kind: "select",
+      values: ["under-18"],
+    }),
+    fixture,
+  );
+
+  const reaction = {
+    emoji: { name: HIDE_CHANNELS_EMOJI },
+    message: {
+      id: hidePanelMessageId,
+      guildId: GUILD_ID,
+      guild: fixture.guild,
+    },
+  };
+  const user = { id: MEMBER_ID };
+  await handleSelfRoleReaction(
+    reaction,
+    user,
+    { store: fixture.store, nsfwVisibility: fixture.nsfwVisibility },
+    "add",
+  );
+  assert.equal(fixture.store.getHideChannelsSelection(GUILD_ID, MEMBER_ID), true);
+  assert.equal(
+    fixture.nsfwVisibility.get(GUILD_ID, channel.id, MEMBER_ID),
+    null,
+  );
+
+  await handleSelfRoleInteraction(
+    makeInteraction(fixture, {
+      customId: "self-role:select:age",
+      kind: "select",
+      values: ["18"],
+    }),
+    fixture,
+  );
+  assert.equal(
+    channel.permissionsFor(fixture.member).has(PermissionFlagsBits.ViewChannel),
+    false,
+  );
+  assert.ok(fixture.nsfwVisibility.get(GUILD_ID, channel.id, MEMBER_ID));
+
+  await handleSelfRoleReaction(
+    reaction,
+    user,
+    { store: fixture.store, nsfwVisibility: fixture.nsfwVisibility },
+    "remove",
+  );
+  assert.equal(fixture.store.getHideChannelsSelection(GUILD_ID, MEMBER_ID), false);
+  assert.equal(
+    channel.permissionsFor(fixture.member).has(PermissionFlagsBits.ViewChannel),
+    true,
+  );
+  assert.equal(
+    fixture.nsfwVisibility.get(GUILD_ID, channel.id, MEMBER_ID),
+    null,
+  );
+});
+
+test("color controls remain inactive until their options are approved", async (t) => {
   const fixture = makeFixture(t);
   const category = makeInteraction(fixture, { customId: "self-role:open:color" });
   await handleSelfRoleInteraction(category, fixture);
-  const controls = category.events[0].payload.components[0].components;
-  assert.deepEqual(controls.map((button) => button.data.custom_id), [
-    "self-role:color:set",
-    "self-role:color:remove",
-  ]);
+  assert.match(category.events[0].payload.content, /not available/i);
 
   const set = makeInteraction(fixture, {
     customId: "self-role:color:set",
@@ -281,75 +521,15 @@ test("color category offers a custom color modal and a removal control", async (
     },
   });
   await handleSelfRoleInteraction(set, fixture);
-  assert.equal(set.events[0].type, "show-modal");
-  assert.equal(set.events[0].modal.data.custom_id, "self-role:color:submit");
-});
+  assert.match(set.events[0].payload.content, /not available/i);
 
-test("members can customize and remove only their own permissionless color role", async (t) => {
-  const fixture = makeFixture(t);
-  const setColor = makeInteraction(fixture, {
+  const submit = makeInteraction(fixture, {
     customId: "self-role:color:submit",
     kind: "modal",
   });
-  await handleSelfRoleInteraction(setColor, fixture);
-
-  const colorRole = fixture.guild.roles.cache.get("941800000000000088");
-  assert.equal(colorRole.color, 0xefaac9);
-  assert.equal(colorRole.permissions.bitfield, 0n);
-  assert.equal(fixture.member.roles.cache.has(colorRole.id), true);
-  assert.equal(fixture.store.getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], colorRole.id);
-  assert.match(setColor.events.at(-1).payload, /#EFAAC9/);
-
-  const remove = makeInteraction(fixture, {
-    customId: "self-role:color:remove",
-    message: {
-      author: { bot: true },
-      components: [{ components: [{ customId: "self-role:color:remove" }] }],
-    },
-  });
-  await handleSelfRoleInteraction(remove, fixture);
-  assert.equal(fixture.member.roles.cache.has(colorRole.id), false);
-  assert.equal(fixture.store.getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], colorRole.id);
-  assert.match(remove.events.at(-1).payload, /color role was removed/);
-});
-
-test("invalid custom colors and missing role permissions do not assign a role", async (t) => {
-  const fixture = makeFixture(t);
-  const invalid = makeInteraction(fixture, {
-    customId: "self-role:color:submit",
-    kind: "modal",
-  });
-  invalid.fields.getTextInputValue = () => "pink";
-  await handleSelfRoleInteraction(invalid, fixture);
-  assert.match(invalid.events[0].payload.content, /six-digit hex color/);
+  await handleSelfRoleInteraction(submit, fixture);
+  assert.match(submit.events[0].payload.content, /inactive until they are approved/i);
   assert.equal(fixture.member.roles.cache.size, 0);
-
-  fixture.guild.members.me.permissions.has = () => false;
-  const denied = makeInteraction(fixture, {
-    customId: "self-role:color:submit",
-    kind: "modal",
-  });
-  await handleSelfRoleInteraction(denied, fixture);
-  assert.match(denied.events.at(-1).payload, /Manage Roles and must rank above/);
-  assert.equal(fixture.member.roles.cache.size, 0);
-
-  fixture.guild.members.me.permissions.has = () => true;
-  const highRole = await fixture.guild.roles.create({
-    name: "existing color",
-    color: 0x123456,
-    permissions: [],
-  });
-  highRole.editable = false;
-  fixture.store.setColorRoleId(GUILD_ID, MEMBER_ID, highRole.id);
-  await fixture.member.roles.add(highRole);
-  const hierarchyDenied = makeInteraction(fixture, {
-    customId: "self-role:color:submit",
-    kind: "modal",
-  });
-  await handleSelfRoleInteraction(hierarchyDenied, fixture);
-  assert.match(hierarchyDenied.events.at(-1).payload, /cannot be safely managed/i);
-  assert.equal(highRole.color, 0x123456);
-  assert.equal(fixture.member.roles.cache.has(highRole.id), true);
 });
 
 test("unrelated private-ticket controls remain separate from the self-role panel", async (t) => {

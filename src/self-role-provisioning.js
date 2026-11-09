@@ -1,17 +1,23 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits } from "discord.js";
+import {
+  ActionRowBuilder,
+  ChannelType,
+  EmbedBuilder,
+  PermissionFlagsBits,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+} from "discord.js";
 
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
-import { buildNsfwVisibilityControlRow } from "./nsfw-visibility-system.js";
 import {
   SELF_ROLE_CATEGORIES,
   SELF_ROLE_CHANNEL_NAME,
   SELF_ROLE_EMBED_FOOTER,
   SELF_ROLE_PINK,
-  SELF_ROLE_PREFIX,
+  HIDE_CHANNELS_EMOJI,
   SELF_ROLE_STAFF_KEY,
-  SELF_ROLE_STAFF_NAME,
   getSelfRoleDefinition,
   getSelfRoleCategory,
+  getSelfRolePanelFooter,
   normalizeSelfRoleName,
 } from "./self-role-catalog.js";
 
@@ -40,8 +46,9 @@ export async function provisionSelfRoleGuild(guild, client, store) {
     PermissionFlagsBits.SendMessages,
     PermissionFlagsBits.EmbedLinks,
     PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.AddReactions,
+    PermissionFlagsBits.ManageChannels,
   ];
-  if (needsCreate || needsRename) requiredPermissions.push(PermissionFlagsBits.ManageChannels);
   if (getProvisionableRoleDefinitions().length) requiredPermissions.push(PermissionFlagsBits.ManageRoles);
 
   if (!(await botHasPermissions(guild, requiredPermissions))) {
@@ -53,7 +60,7 @@ export async function provisionSelfRoleGuild(guild, client, store) {
   if (!channel) return false;
 
   const roleIds = await ensureSelfRoles(guild, store);
-  await ensureSelfRolePanel(channel, client, store, roleIds);
+  await ensureSelfRolePanels(channel, client, store, roleIds);
   return true;
 }
 
@@ -190,94 +197,188 @@ export async function ensureSelfRoles(guild, store) {
     }
 
     store.setRoleId(guild.id, definition.key, role.id);
-    if (definition.key === SELF_ROLE_STAFF_KEY) continue;
     roleIds[definition.key] = role.id;
   }
 
   return roleIds;
 }
 
-export function buildSelfRolePickerPayload() {
-  const embed = new EmbedBuilder()
-    .setColor(SELF_ROLE_PINK)
-    .setTitle(formatEmbedTitle("Choose your self roles"))
-    .setDescription(
-      [
-        "Choose one of the five approved categories below. Your role options are waiting for approval, so no unapproved role choices are active.",
-        "",
-        "Use the age-restricted channels menu below to show or hide channels you can already access.",
-        "",
-        "Any future age role will be self-declared only. It will never verify age, grant age-restricted access, or change Discord's native channel restrictions.",
-        "",
-        "Color lets you enter a custom hex value. Sugar only creates or updates a permissionless color role when it can safely manage that role.",
-      ].join("\n"),
-    )
-    .addFields(
-      SELF_ROLE_CATEGORIES.map((category) => ({
-        name: toRoyalBold(category.label),
-        value:
-          category.key === "color"
-            ? "Customize your own color, or remove it."
-            : category.key === "age"
-              ? "Self-declared only; never age verification."
-              : "Role choices will be added after approval.",
-      })),
-    )
-    .setFooter({ text: SELF_ROLE_EMBED_FOOTER });
+export function buildAgeSelectionRow(roleIds = {}, member = null) {
+  const category = getSelfRoleCategory("age");
+  if (!category?.options.length) throw new Error("Age role options are not available.");
 
-  const row = new ActionRowBuilder().addComponents(
-    SELF_ROLE_CATEGORIES.map((category) =>
-      new ButtonBuilder()
-        .setCustomId(`${SELF_ROLE_PREFIX}open:${category.key}`)
-        .setLabel(toRoyalBold(category.label))
-        .setStyle(ButtonStyle.Primary),
-    ),
-  );
-
-  return {
-    embeds: [embed],
-    components: [row, buildNsfwVisibilityControlRow()],
-    allowedMentions: { parse: [] },
-  };
+  const options = category.options.map((option) => {
+    const definition = getSelfRoleDefinition(`age:${option.key}`);
+    const item = new StringSelectMenuOptionBuilder()
+      .setLabel(toRoyalBold(option.label))
+      .setValue(option.key)
+      .setEmoji(option.emoji);
+    const roleId = roleIds[definition.key];
+    if (roleId && member?.roles?.cache?.has?.(roleId)) item.setDefault(true);
+    return item;
+  });
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId("self-role:select:age")
+    .setPlaceholder(toRoyalBold("Choose your age"))
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(options);
+  return new ActionRowBuilder().addComponents(menu);
 }
 
-export async function ensureSelfRolePanel(channel, client, store, roleIds) {
+export function buildSelfRolePanelPayloads(roleIds = {}) {
+  const makeEmbed = (panelKey, title, description) =>
+    new EmbedBuilder()
+      .setColor(SELF_ROLE_PINK)
+      .setTitle(formatEmbedTitle(title))
+      .setDescription(description)
+      .setFooter({ text: getSelfRolePanelFooter(panelKey) });
+  const age = getSelfRoleCategory("age");
+  const ageOptions = age.options.map((option) => `${option.emoji}  ${toRoyalBold(option.label)}`).join("\n");
+  const inactivePanels = SELF_ROLE_CATEGORIES
+    .filter(({ key }) => ["gender", "sexuality", "interests", "color"].includes(key))
+    .map((category) => ({
+      key: category.key,
+      payload: {
+        embeds: [
+          makeEmbed(
+            category.key,
+            category.label,
+            `${category.description} No choices are active until they are approved.`,
+          ),
+        ],
+      },
+      reactions: {},
+    }));
+  const panels = [
+    {
+      key: "intro",
+      payload: {
+        embeds: [
+          makeEmbed(
+            "intro",
+            "Self-Role Guide",
+            [
+              "Choose one self-declared Age role from the selector. It is not age verification.",
+              "",
+              `React with ${HIDE_CHANNELS_EMOJI} in Hide Channels to hide designated NSFW channels. Remove your reaction to restore your previous visibility.`,
+              "",
+              "Discord's native age restrictions always remain in force.",
+            ].join("\n"),
+          ),
+        ],
+      },
+      reactions: {},
+    },
+    {
+      key: "age",
+      payload: {
+        embeds: [
+          makeEmbed(
+            "age",
+            "Age",
+            [
+              "Select one option below. Choosing a different age replaces your previous Age role.",
+              "Age is self-declared, not age verification. Selecting 18- limits visibility to #support; it never grants access to age-restricted channels.",
+              "",
+              ageOptions,
+            ].join("\n"),
+          ),
+        ],
+        components: [buildAgeSelectionRow(roleIds)],
+      },
+      reactions: {},
+    },
+    ...inactivePanels.slice(0, 3),
+    inactivePanels[3],
+    {
+      key: "hide-channels",
+      payload: {
+        embeds: [
+          makeEmbed(
+            "hide-channels",
+            "Hide Channels",
+            [
+              `React with ${HIDE_CHANNELS_EMOJI} to hide NSFW channels you can already access.`,
+              "Remove your reaction to restore the previous visibility.",
+              "This only changes channel visibility; it never grants access or changes Discord's native age restrictions.",
+            ].join("\n"),
+          ),
+        ],
+      },
+      reactions: { [HIDE_CHANNELS_EMOJI]: "hide-nsfw" },
+    },
+  ];
+
+  return panels.map((panel) => ({
+    ...panel,
+    payload: {
+      ...panel.payload,
+      components: panel.payload.components ?? [],
+      allowedMentions: { parse: [] },
+    },
+  }));
+}
+
+export function buildSelfRolePickerPayload(roleIds = {}) {
+  return buildSelfRolePanelPayloads(roleIds)[0].payload;
+}
+
+export async function ensureSelfRolePanels(channel, client, store, roleIds) {
   const guildId = channel.guildId ?? channel.guild?.id;
   if (!guildId) throw new Error("The self-role channel has no guild.");
 
   const current = store.getGuild(guildId);
-  let message = null;
-  if (current.channelId === channel.id && current.messageId) {
-    try {
-      message = await channel.messages.fetch(current.messageId);
-    } catch (error) {
-      if (error?.code !== 10008 && error?.code !== 10003) throw error;
+  const recentMessages = await channel.messages.fetch({ limit: 100 });
+  if (!recentMessages?.values) throw new Error("The self-role message history is unavailable.");
+  const recent = [...recentMessages.values()];
+  const result = {};
+
+  for (const panel of buildSelfRolePanelPayloads(roleIds)) {
+    let message = null;
+    const savedId =
+      store.getPanelMessageId(guildId, panel.key) ?? (panel.key === "intro" ? current.messageId : null);
+    if (savedId && current.channelId === channel.id) {
+      try {
+        message = await channel.messages.fetch(savedId);
+      } catch (error) {
+        if (error?.code !== 10008 && error?.code !== 10003) throw error;
+      }
+      if (!isManagedPanel(message, client.user?.id, panel.key)) message = null;
+    }
+    if (!message) {
+      message = recent.find((candidate) => isManagedPanel(candidate, client.user?.id, panel.key)) ?? null;
+    }
+
+    message = message ? await message.edit(panel.payload) : await channel.send(panel.payload);
+    store.setReactionPanelMessage(guildId, panel.key, channel.id, message.id, panel.reactions);
+    result[panel.key] = message;
+
+    if (panel.key === "hide-channels" && typeof message.react === "function") {
+      try {
+        await message.react(HIDE_CHANNELS_EMOJI);
+      } catch (error) {
+        console.warn(
+          `[self-roles] could not seed the Hide Channels reaction in guild ${guildId} (${error?.code ?? "unknown error"})`,
+        );
+      }
     }
   }
 
-  if (!isManagedPanel(message, client.user?.id)) {
-    const recentMessages = await channel.messages.fetch({ limit: 100 });
-    message = [...(recentMessages?.values?.() ?? [])].find((candidate) =>
-      isManagedPanel(candidate, client.user?.id),
-    ) ?? null;
-  }
-
-  const payload = buildSelfRolePickerPayload();
-  if (message) {
-    await message.edit(payload);
-  } else {
-    message = await channel.send(payload);
-  }
-
-  store.setChannel(guildId, channel.id, message.id);
-  return { message, roleIds };
+  return { messages: result, roleIds };
 }
 
-function isManagedPanel(message, botId) {
+export async function ensureSelfRolePanel(channel, client, store, roleIds) {
+  return ensureSelfRolePanels(channel, client, store, roleIds);
+}
+
+function isManagedPanel(message, botId, panelKey) {
+  const footers = message?.embeds?.map((embed) => embed.footer?.text) ?? [];
+  const isLegacyIntro = panelKey === "intro" && footers.includes(SELF_ROLE_EMBED_FOOTER);
   return Boolean(
     botId &&
       message?.author?.id === botId &&
-      message.embeds?.some((embed) => embed.footer?.text === SELF_ROLE_EMBED_FOOTER),
+      (footers.includes(getSelfRolePanelFooter(panelKey)) || isLegacyIntro),
   );
 }
 
@@ -302,15 +403,11 @@ async function fetchSelfRoleChannelInventory(guild) {
 }
 
 function getProvisionableRoleDefinitions() {
-  const definitions = SELF_ROLE_CATEGORIES.flatMap((category) =>
+  return SELF_ROLE_CATEGORIES.flatMap((category) =>
     category.options
       .map((option) => getSelfRoleDefinition(`${category.key}:${option.key}`))
       .filter(Boolean),
   );
-  if (getSelfRoleCategory("age")?.options.some((option) => option.key === "under-18")) {
-    definitions.push({ key: SELF_ROLE_STAFF_KEY, name: SELF_ROLE_STAFF_NAME, color: null });
-  }
-  return definitions;
 }
 
 async function botHasPermissions(guild, requiredPermissions) {
