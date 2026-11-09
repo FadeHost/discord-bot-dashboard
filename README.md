@@ -163,12 +163,14 @@ data stops startup instead of being overwritten.
 
 ## NSFW channel visibility
 
-Members can use `/show-hide` with **Show NSFW channels** or **Hide NSFW
-channels**. Sugar only changes the member's View Channel overwrite for channels
-Discord already marks as age-restricted. Showing restores the saved prior
-permission state; it never grants new access or changes Discord's native
-age-restricted setting. The bot needs Manage Channels on each channel it can
-update. Visibility records are kept in `nsfw-visibility.json`.
+The self-role panel includes an **Age-restricted channels** select menu with
+**Show NSFW channels** and **Hide NSFW channels** actions. Sugar only changes
+the member's View Channel overwrite for channels Discord already marks as
+age-restricted. Showing restores the saved prior permission state; it never
+grants new access or changes Discord's native age-restricted setting. The bot
+needs Manage Channels on each channel it can update. Visibility records are
+kept in `nsfw-visibility.json`. On startup, Sugar removes the retired
+`/show-hide` guild command while preserving other application commands.
 
 GitHub `main` stores the source history. To make a portable snapshot of the
 project files and current data, run this from the project directory:

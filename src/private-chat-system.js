@@ -15,7 +15,6 @@ import {
 
 import { MAX_PRIVATE_CHAT_MEMBERS } from "./private-chat-store.js";
 import { buildMessageDeletionCommands } from "./message-deletion.js";
-import { buildNsfwVisibilityCommand } from "./nsfw-visibility-system.js";
 import { registerApplicationCommands } from "./command-registry.js";
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { formatPrivateChatChannelName, normalizeCategoryName } from "./private-chat-format.js";
@@ -132,7 +131,8 @@ export function attachPrivateChatSystem(client, { token, applicationId, store, l
       token,
       applicationId,
       guildId: guild.id,
-      commands: [...buildMessageDeletionCommands(), buildNsfwVisibilityCommand()],
+      commands: buildMessageDeletionCommands(),
+      removeCommandNames: ["show-hide"],
     }).catch((error) => {
       console.error(`[commands] could not register guild commands in ${guild.id}: ${error.message}`);
     });
@@ -167,12 +167,18 @@ async function initializePrivateChatLobby(client, { token, applicationId, store,
   const guildIds = new Set(client.guilds.cache.keys());
   if (lobby?.guildId) guildIds.add(lobby.guildId);
   for (const guildId of guildIds) {
-    const commands = [...buildMessageDeletionCommands(), buildNsfwVisibilityCommand()];
+    const commands = [...buildMessageDeletionCommands()];
     if (lobby?.type === ChannelType.GuildText && guildId === lobby.guildId) {
       commands.unshift(buildPrivateChatCommand());
     }
     try {
-      await registerApplicationCommands({ token, applicationId, guildId, commands });
+      await registerApplicationCommands({
+        token,
+        applicationId,
+        guildId,
+        commands,
+        removeCommandNames: ["show-hide"],
+      });
       console.log(`[commands] registered in server ${guildId}`);
     } catch (error) {
       console.error(`[commands] registration failed in ${guildId}: ${error.message}`);

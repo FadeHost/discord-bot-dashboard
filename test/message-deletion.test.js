@@ -214,8 +214,9 @@ test("the three deletion commands register with bounded amounts", () => {
 
 test("command registration replaces only commands owned by this feature", () => {
   const merged = mergeApplicationCommands(
-    [{ name: "other" }, { name: "delete" }],
+    [{ name: "other" }, { name: "delete" }, { name: "show-hide" }],
     [{ name: "delete" }, { name: "vip-delete" }],
+    ["show-hide"],
   );
   assert.deepEqual(merged, [{ name: "other" }, { name: "delete" }, { name: "vip-delete" }]);
 });

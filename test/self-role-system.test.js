@@ -112,6 +112,14 @@ test("the pink self-role panel uses Royal Bold styling and clearly holds options
   assert.ok(embed.fields.every(({ name }) => name === toRoyalBold(name.normalize("NFKC"))));
   assert.equal(payload.components[0].components.length, 5);
   assert.ok(payload.components[0].components.every(({ data }) => data.label === toRoyalBold(data.label.normalize("NFKC"))));
+  assert.equal(payload.components[1].components.length, 1);
+  const visibilityMenu = payload.components[1].components[0].toJSON();
+  assert.equal(visibilityMenu.custom_id, "nsfw-visibility:action");
+  assert.deepEqual(
+    visibilityMenu.options.map(({ value }) => value),
+    ["show", "hide"],
+  );
+  assert.match(embed.description, /age-restricted channels menu/i);
   assert.match(embed.description, /waiting for approval/i);
   assert.match(embed.description, /never verify age/i);
   assert.match(embed.description, /grant age-restricted access/i);

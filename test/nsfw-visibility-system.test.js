@@ -8,13 +8,15 @@ import { Collection, PermissionFlagsBits } from "discord.js";
 import { NsfwVisibilityStore } from "../src/nsfw-visibility-store.js";
 import {
   applyNsfwVisibility,
-  buildNsfwVisibilityCommand,
+  buildNsfwVisibilityControlRow,
   handleNsfwVisibilityInteraction,
 } from "../src/nsfw-visibility-system.js";
 
 const GUILD_ID = "941800000000000001";
 const MEMBER_ID = "941800000000000002";
 const BOT_ID = "941800000000000003";
+const PANEL_CHANNEL_ID = "941800000000000020";
+const PANEL_MESSAGE_ID = "941800000000000021";
 
 function permissionBits(values = []) {
   const bitfield = values.reduce((bits, value) => bits | BigInt(value), 0n);
@@ -93,14 +95,22 @@ function makeFixture(t, { canManage = true } = {}) {
     channels: { fetch: async () => channels },
     members: { me: botMember, fetch: async () => member },
   };
-  return { dataDir, store, member, botMember, guild, channels, nsfw, regular, editCalls, channel };
+  const selfRoles = {
+    getGuild: (guildId) =>
+      guildId === GUILD_ID ? { channelId: PANEL_CHANNEL_ID, messageId: PANEL_MESSAGE_ID } : {},
+  };
+  const client = { user: { id: BOT_ID } };
+  return { dataDir, store, selfRoles, client, member, botMember, guild, channels, nsfw, regular, editCalls, channel };
 }
 
-test("show-hide command offers only show or hide and keeps Discord's age restriction", () => {
-  const command = buildNsfwVisibilityCommand();
-  assert.equal(command.name, "show-hide");
-  assert.deepEqual(command.options[0].choices.map(({ value }) => value), ["show", "hide"]);
-  assert.match(command.description, /already access/);
+test("the panel control offers show or hide without a slash command", () => {
+  const row = buildNsfwVisibilityControlRow();
+  const menu = row.components[0].toJSON();
+  assert.equal(menu.custom_id, "nsfw-visibility:action");
+  assert.deepEqual(menu.options.map(({ value }) => value), ["show", "hide"]);
+  assert.match(menu.placeholder, /age-restricted channels/i);
+  assert.match(menu.options[0].description, /saved access/i);
+  assert.match(menu.options[1].description, /already access/i);
 });
 
 test("hide and show restore only the member's previous View Channel state", async (t) => {
@@ -189,22 +199,48 @@ test("channels without Manage Channels permission are not modified", async (t) =
   assert.equal(fixture.store.listMember(GUILD_ID, MEMBER_ID).length, 0);
 });
 
-test("command action is validated and the response is private", async (t) => {
+test("the panel select validates its origin and responds privately", async (t) => {
   const fixture = makeFixture(t);
   const events = [];
   const interaction = {
     guild: fixture.guild,
     guildId: GUILD_ID,
     user: fixture.member,
-    options: { getString: () => "show" },
+    customId: "nsfw-visibility:action",
+    values: ["hide"],
+    channelId: PANEL_CHANNEL_ID,
+    message: { id: PANEL_MESSAGE_ID, author: { id: BOT_ID } },
     inGuild: () => true,
     deferReply: async (options) => events.push({ type: "defer", options }),
     editReply: async (payload) => events.push({ type: "edit", payload }),
+    reply: async (payload) => events.push({ type: "reply", payload }),
   };
 
-  await handleNsfwVisibilityInteraction(interaction, { store: fixture.store });
+  await handleNsfwVisibilityInteraction(interaction, {
+    store: fixture.store,
+    selfRoles: fixture.selfRoles,
+    client: fixture.client,
+  });
   assert.equal(events[0].options.ephemeral, true);
+  assert.match(events[1].payload, /1 eligible NSFW channel hidden/);
   assert.match(events[1].payload, /native age restrictions remain in force/);
+
+  const staleEvents = [];
+  const stale = {
+    ...interaction,
+    channelId: "941800000000000099",
+    deferReply: async (options) => staleEvents.push({ type: "defer", options }),
+    reply: async (payload) => staleEvents.push({ type: "reply", payload }),
+  };
+
+  await handleNsfwVisibilityInteraction(stale, {
+    store: fixture.store,
+    selfRoles: fixture.selfRoles,
+    client: fixture.client,
+  });
+  assert.equal(staleEvents[0].payload.ephemeral, true);
+  assert.match(staleEvents[0].payload.content, /panel control is no longer active/);
+  assert.equal(staleEvents.length, 1);
 });
 
 test("store state survives restart and deleting a channel clears only its records", (t) => {
