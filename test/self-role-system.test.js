@@ -107,7 +107,7 @@ test("only the approved age choices are active", () => {
   ]);
   const age = SELF_ROLE_CATEGORIES.find(({ key }) => key === "age");
   assert.deepEqual(age.options.map(({ key }) => key), ["under-18", ...Array.from({ length: 23 }, (_, index) => String(index + 18))]);
-  assert.equal(new Set(age.options.map(({ emoji }) => emoji)).size, 24);
+  assert.ok(age.options.every(({ emoji }) => emoji === undefined));
   assert.ok(SELF_ROLE_CATEGORIES.filter(({ key }) => key !== "age").every((category) => category.options.length === 0));
   assert.match(SELF_ROLE_CATEGORIES.find(({ key }) => key === "age").description, /never verify age/i);
 });
@@ -126,9 +126,11 @@ test("seven pink panels appear in order with a 24-option Age selector and inacti
     "under-18",
     ...Array.from({ length: 23 }, (_, index) => String(index + 18)),
   ]);
-  assert.equal(new Set(menu.options.map(({ emoji }) => emoji.name)).size, 24);
-  assert.match(age.embeds[0].data.description, /self-declared, not age verification/i);
-  assert.match(age.embeds[0].data.description, /never grants access to age-restricted channels/i);
+  assert.ok(menu.options.every(({ emoji }) => emoji === undefined));
+  assert.equal(age.embeds[0].data.description, "Please select your age.");
+  const intro = panels.find(({ key }) => key === "intro").payload.embeds[0].data.description;
+  assert.match(intro, /self-declared Age role.*not age verification/i);
+  assert.match(intro, /Discord's native age restrictions always remain in force/i);
 
   for (const key of ["gender", "sexuality", "interests", "color"]) {
     const panel = panels.find((item) => item.key === key);
@@ -139,6 +141,7 @@ test("seven pink panels appear in order with a 24-option Age selector and inacti
   const hide = panels.find(({ key }) => key === "hide-channels");
   assert.deepEqual(hide.reactions, { [HIDE_CHANNELS_EMOJI]: "hide-nsfw" });
   assert.equal(hide.payload.components.length, 0);
+  assert.match(hide.payload.embeds[0].data.description, /never grants access or changes Discord's native age restrictions/i);
 });
 
 test("unapproved categories and forged multi-age selections cannot change roles", async (t) => {
