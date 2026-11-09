@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { isSelfRoleKey } from "./self-role-catalog.js";
+import { getSelfRoleCategory, isSelfRoleKey, SELF_ROLE_PANEL_KEYS } from "./self-role-catalog.js";
 
 const STORE_VERSION = 1;
 const MAX_GUILDS = 500;
@@ -9,7 +9,19 @@ const MAX_TICKETS_PER_GUILD = 10_000;
 const SNOWFLAKE = /^\d{5,25}$/u;
 
 function emptyGuild() {
-  return { channelId: null, messageId: null, staffRoleId: null, roleIds: {}, colorRoleIds: {}, tickets: {} };
+  return {
+    channelId: null,
+    messageId: null,
+    staffRoleId: null,
+    roleIds: {},
+    colorRoleIds: {},
+    tickets: {},
+    panelMessageIds: {},
+    reactionMappings: {},
+    ageSelections: {},
+    hideChannelsSelections: {},
+    underageAccess: {},
+  };
 }
 
 /**
@@ -44,9 +56,183 @@ export class SelfRoleStore {
     const id = snowflake(guildId, "guild");
     const channel = snowflake(channelId, "channel");
     const current = this.#guild(id);
-    if (current.channelId !== channel) return false;
+    const ownsPanelChannel = current.channelId === channel;
+    const panelMessageIds = ownsPanelChannel ? {} : { ...current.panelMessageIds };
+    const reactionMappings = ownsPanelChannel ? {} : { ...current.reactionMappings };
+    const underageAccess = { ...current.underageAccess };
+    let clearedAccess = false;
 
-    this.#replaceGuild(id, { ...current, channelId: null, messageId: null });
+    for (const [memberId, access] of Object.entries(underageAccess)) {
+      const channels = { ...access.channels };
+      if (Object.hasOwn(channels, channel)) {
+        delete channels[channel];
+        clearedAccess = true;
+      }
+      const supportChannelId = access.supportChannelId === channel ? null : access.supportChannelId;
+      if (supportChannelId !== access.supportChannelId) clearedAccess = true;
+      if (!Object.keys(channels).length && !supportChannelId) {
+        delete underageAccess[memberId];
+      } else {
+        underageAccess[memberId] = { supportChannelId, channels };
+      }
+    }
+
+    if (!ownsPanelChannel && !clearedAccess) return false;
+    this.#replaceGuild(id, {
+      ...current,
+      channelId: ownsPanelChannel ? null : current.channelId,
+      messageId: ownsPanelChannel ? null : current.messageId,
+      panelMessageIds,
+      reactionMappings,
+      underageAccess,
+    });
+    return true;
+  }
+
+  setReactionPanelMessage(guildId, panelKey, channelId, messageId, reactions = {}) {
+    const id = snowflake(guildId, "guild");
+    const channel = snowflake(channelId, "channel");
+    const message = snowflake(messageId, "message");
+    if (!SELF_ROLE_PANEL_KEYS.includes(panelKey)) throw new Error("That self-role panel is not supported.");
+    const current = this.#guild(id);
+    const panelMessageIds = { ...current.panelMessageIds, [panelKey]: message };
+    const reactionMappings = {
+      ...current.reactionMappings,
+      [panelKey]: cleanReactionMappings(reactions),
+    };
+    this.#replaceGuild(id, {
+      ...current,
+      channelId: channel,
+      messageId: panelKey === "intro" ? message : current.messageId,
+      panelMessageIds,
+      reactionMappings,
+    });
+  }
+
+  getPanelMessageId(guildId, panelKey) {
+    const id = snowflake(guildId, "guild");
+    if (!SELF_ROLE_PANEL_KEYS.includes(panelKey)) return null;
+    return this.#guild(id).panelMessageIds[panelKey] ?? null;
+  }
+
+  getReactionMapping(guildId, messageId, emoji) {
+    const id = snowflake(guildId, "guild");
+    const message = snowflake(messageId, "message");
+    const current = this.#guild(id);
+    const panelKey = Object.entries(current.panelMessageIds).find(([, value]) => value === message)?.[0];
+    if (!panelKey) return null;
+    const key = canonicalEmoji(emoji);
+    return current.reactionMappings[panelKey]?.[key] ?? null;
+  }
+
+  getAgeSelection(guildId, memberId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    return this.#guild(id).ageSelections[member] ?? null;
+  }
+
+  setAgeSelection(guildId, memberId, optionKey) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const age = getSelfRoleCategory("age");
+    if (optionKey !== null && !age?.options.some((option) => option.key === optionKey)) {
+      throw new Error("That age selection is not part of the approved list.");
+    }
+    const current = this.#guild(id);
+    const ageSelections = { ...current.ageSelections };
+    if (optionKey === null) {
+      delete ageSelections[member];
+    } else {
+      ageSelections[member] = optionKey;
+    }
+    this.#replaceGuild(id, { ...current, ageSelections });
+  }
+
+  hasHideChannelsSelection(guildId, memberId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    return this.#guild(id).hideChannelsSelections[member] === true;
+  }
+
+  getHideChannelsSelection(guildId, memberId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const value = this.#guild(id).hideChannelsSelections[member];
+    return typeof value === "boolean" ? value : null;
+  }
+
+  setHideChannelsSelection(guildId, memberId, selected) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    if (typeof selected !== "boolean") throw new Error("A valid hide-channels selection is required.");
+    const current = this.#guild(id);
+    const hideChannelsSelections = { ...current.hideChannelsSelections, [member]: selected };
+    this.#replaceGuild(id, { ...current, hideChannelsSelections });
+  }
+
+  getUnderageAccess(guildId, memberId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const access = this.#guild(id).underageAccess[member];
+    return access
+      ? {
+          supportChannelId: access.supportChannelId,
+          channels: Object.fromEntries(
+            Object.entries(access.channels).map(([channelId, record]) => [
+              channelId,
+              { hadOverwrite: record.hadOverwrite, permissions: { ...record.permissions } },
+            ]),
+          ),
+        }
+      : null;
+  }
+
+  saveUnderageChannelState(guildId, memberId, supportChannelId, channelId, record) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const support = supportChannelId === null ? null : snowflake(supportChannelId, "channel");
+    const channel = snowflake(channelId, "channel");
+    const clean = cleanUnderageChannelState(record);
+    const current = this.#guild(id);
+    const access = current.underageAccess[member] ?? { supportChannelId: support, channels: {} };
+    const channels = { ...access.channels };
+    if (!Object.hasOwn(channels, channel)) channels[channel] = clean;
+    this.#replaceGuild(id, {
+      ...current,
+      underageAccess: {
+        ...current.underageAccess,
+        [member]: { supportChannelId: support ?? access.supportChannelId, channels },
+      },
+    });
+  }
+
+  removeUnderageChannelState(guildId, memberId, channelId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const channel = snowflake(channelId, "channel");
+    const current = this.#guild(id);
+    const access = current.underageAccess[member];
+    if (!access || !Object.hasOwn(access.channels, channel)) return false;
+    const channels = { ...access.channels };
+    delete channels[channel];
+    const underageAccess = { ...current.underageAccess };
+    if (!Object.keys(channels).length && !access.supportChannelId) {
+      delete underageAccess[member];
+    } else {
+      underageAccess[member] = { ...access, channels };
+    }
+    this.#replaceGuild(id, { ...current, underageAccess });
+    return true;
+  }
+
+  clearUnderageAccess(guildId, memberId) {
+    const id = snowflake(guildId, "guild");
+    const member = snowflake(memberId, "member");
+    const current = this.#guild(id);
+    if (!current.underageAccess[member]) return false;
+    const underageAccess = { ...current.underageAccess };
+    delete underageAccess[member];
+    this.#replaceGuild(id, { ...current, underageAccess });
     return true;
   }
 
@@ -228,6 +414,11 @@ function validateData(data) {
 }
 
 function isValidGuild(guild) {
+  const panelMessageIds = guild?.panelMessageIds ?? {};
+  const reactionMappings = guild?.reactionMappings ?? {};
+  const ageSelections = guild?.ageSelections ?? {};
+  const hideChannelsSelections = guild?.hideChannelsSelections ?? {};
+  const underageAccess = guild?.underageAccess ?? {};
   if (
     !isObject(guild) ||
     !nullableSnowflake(guild.channelId) ||
@@ -236,6 +427,11 @@ function isValidGuild(guild) {
     !isObject(guild.roleIds) ||
     (guild.colorRoleIds !== undefined && !isObject(guild.colorRoleIds)) ||
     !isObject(guild.tickets) ||
+    !isValidPanelMessageIds(panelMessageIds) ||
+    !isValidReactionMappings(reactionMappings) ||
+    !isValidAgeSelections(ageSelections) ||
+    !isValidHideChannelsSelections(hideChannelsSelections) ||
+    !isValidUnderageAccess(underageAccess) ||
     Object.keys(guild.roleIds).length > 100 ||
     Object.keys(guild.colorRoleIds ?? {}).length > 100_000 ||
     Object.keys(guild.tickets).length > MAX_TICKETS_PER_GUILD ||
@@ -278,6 +474,115 @@ function isValidTicket(channelId, ticket) {
   );
 }
 
+function isValidPanelMessageIds(value) {
+  return (
+    isObject(value) &&
+    Object.entries(value).every(
+      ([key, messageId]) => SELF_ROLE_PANEL_KEYS.includes(key) && isSnowflake(messageId),
+    )
+  );
+}
+
+function isValidReactionMappings(value) {
+  return (
+    isObject(value) &&
+    Object.entries(value).every(
+      ([panelKey, mappings]) =>
+        SELF_ROLE_PANEL_KEYS.includes(panelKey) &&
+        isObject(mappings) &&
+        Object.entries(mappings).every(
+          ([emoji, action]) =>
+            typeof emoji === "string" &&
+            emoji.length > 0 &&
+            emoji.length <= 64 &&
+            action === "hide-nsfw",
+        ),
+    )
+  );
+}
+
+function isValidAgeSelections(value) {
+  const age = getSelfRoleCategory("age");
+  return (
+    isObject(value) &&
+    Object.entries(value).every(
+      ([memberId, optionKey]) =>
+        isSnowflake(memberId) && age?.options.some((option) => option.key === optionKey),
+    )
+  );
+}
+
+function isValidHideChannelsSelections(value) {
+  return (
+    isObject(value) &&
+    Object.entries(value).every(([memberId, selected]) => isSnowflake(memberId) && typeof selected === "boolean")
+  );
+}
+
+function isValidUnderageAccess(value) {
+  return (
+    isObject(value) &&
+    Object.entries(value).every(([memberId, access]) => {
+      if (
+        !isSnowflake(memberId) ||
+        !isObject(access) ||
+        !nullableSnowflake(access.supportChannelId) ||
+        !isObject(access.channels) ||
+        Object.keys(access.channels).length > 5000
+      ) {
+        return false;
+      }
+      return Object.entries(access.channels).every(
+        ([channelId, record]) => isSnowflake(channelId) && isValidUnderageChannelState(record),
+      );
+    })
+  );
+}
+
+function isValidUnderageChannelState(record) {
+  const allowed = new Set(["ViewChannel", "SendMessages", "ReadMessageHistory"]);
+  return (
+    isObject(record) &&
+    typeof record.hadOverwrite === "boolean" &&
+    isObject(record.permissions) &&
+    Object.keys(record.permissions).length > 0 &&
+    Object.entries(record.permissions).every(
+      ([permission, value]) =>
+        allowed.has(permission) && (value === null || typeof value === "boolean"),
+    )
+  );
+}
+
+function cleanReactionMappings(reactions) {
+  if (!isObject(reactions)) throw new Error("Reaction-role mappings must be an object.");
+  const clean = {};
+  for (const [emoji, action] of Object.entries(reactions)) {
+    const key = canonicalEmoji(emoji);
+    if (!key || key.length > 64 || action !== "hide-nsfw") {
+      throw new Error("A reaction-role mapping is invalid.");
+    }
+    clean[key] = action;
+  }
+  return clean;
+}
+
+function cleanUnderageChannelState(record) {
+  if (!isValidUnderageChannelState(record)) {
+    throw new Error("A valid previous channel permission state is required.");
+  }
+  return {
+    hadOverwrite: record.hadOverwrite,
+    permissions: { ...record.permissions },
+  };
+}
+
+function canonicalEmoji(value) {
+  return String(value ?? "")
+    .normalize("NFC")
+    .replace(/[\uFE0E\uFE0F]/gu, "")
+    .trim();
+}
+
 function nullableSnowflake(value) {
   return value === null || isSnowflake(value);
 }
@@ -303,6 +608,29 @@ function copyGuild(guild) {
     colorRoleIds: { ...(guild.colorRoleIds ?? {}) },
     tickets: Object.fromEntries(
       Object.entries(guild.tickets).map(([channelId, ticket]) => [channelId, { ...ticket }]),
+    ),
+    panelMessageIds: { ...(guild.panelMessageIds ?? {}) },
+    reactionMappings: Object.fromEntries(
+      Object.entries(guild.reactionMappings ?? {}).map(([panelKey, mappings]) => [
+        panelKey,
+        { ...mappings },
+      ]),
+    ),
+    ageSelections: { ...(guild.ageSelections ?? {}) },
+    hideChannelsSelections: { ...(guild.hideChannelsSelections ?? {}) },
+    underageAccess: Object.fromEntries(
+      Object.entries(guild.underageAccess ?? {}).map(([memberId, access]) => [
+        memberId,
+        {
+          supportChannelId: access.supportChannelId,
+          channels: Object.fromEntries(
+            Object.entries(access.channels).map(([channelId, record]) => [
+              channelId,
+              { hadOverwrite: record.hadOverwrite, permissions: { ...record.permissions } },
+            ]),
+          ),
+        },
+      ]),
     ),
   };
 }

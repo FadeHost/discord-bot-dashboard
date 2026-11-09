@@ -169,7 +169,7 @@ export function createBot({
     store: privateChats,
     lobbyChannelId: PRIVATE_CHAT_LOBBY_CHANNEL_ID,
   });
-  attachSelfRoleSystem(client, { store: selfRoles });
+  attachSelfRoleSystem(client, { store: selfRoles, nsfwVisibility });
   attachNsfwVisibilitySystem(client, { store: nsfwVisibility, selfRoles });
   attachMessageDeletionSystem(client, { settings, moderationLogs });
 

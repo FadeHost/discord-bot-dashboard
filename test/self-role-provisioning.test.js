@@ -8,11 +8,11 @@ import { ChannelType, Collection, PermissionFlagsBits } from "discord.js";
 import { toRoyalBold } from "../src/embed-format.js";
 import {
   SELF_ROLE_CHANNEL_NAME,
-  SELF_ROLE_EMBED_FOOTER,
+  SELF_ROLE_PANEL_KEYS,
 } from "../src/self-role-catalog.js";
 import {
   ensureSelfRoleChannel,
-  ensureSelfRolePanel,
+  ensureSelfRolePanels,
   ensureSelfRoles,
   provisionSelfRoleGuild,
 } from "../src/self-role-provisioning.js";
@@ -180,24 +180,25 @@ test("an unavailable channel inventory fails closed instead of creating a duplic
   assert.equal(createCalls, 0);
 });
 
-test("provisioning creates no unapproved self-role or staff roles", async (t) => {
+test("provisioning creates only the approved Age roles and no staff role", async (t) => {
   const dataDir = directory(t);
   const store = new SelfRoleStore(dataDir);
   const everyone = role(GUILD_ID, "@everyone");
   const { guild, roleCache, createCalls } = guildWithRoleManager([everyone]);
 
   const roleIds = await ensureSelfRoles(guild, store);
-  assert.deepEqual(roleIds, {});
-  assert.equal(createCalls.length, 0);
-  assert.equal(roleCache.size, 1);
+  assert.equal(Object.keys(roleIds).length, 24);
+  assert.ok(Object.keys(roleIds).every((key) => key.startsWith("age:")));
+  assert.equal(createCalls.length, 24);
+  assert.equal(roleCache.size, 25);
   assert.equal(store.getGuild(GUILD_ID).staffRoleId, null);
 
   const restarted = new SelfRoleStore(dataDir);
-  assert.deepEqual(await ensureSelfRoles(guild, restarted), {});
-  assert.equal(createCalls.length, 0);
+  assert.deepEqual(await ensureSelfRoles(guild, restarted), roleIds);
+  assert.equal(createCalls.length, 24);
 });
 
-test("existing role names are left untouched while role choices await approval", async (t) => {
+test("privileged roles that match an approved Age option fail closed", async (t) => {
   const store = new SelfRoleStore(directory(t));
   const privileged = role(
     "941800000000000006",
@@ -206,7 +207,7 @@ test("existing role names are left untouched while role choices await approval",
   );
   const { guild, createCalls } = guildWithRoleManager([role(GUILD_ID, "@everyone"), privileged]);
 
-  assert.deepEqual(await ensureSelfRoles(guild, store), {});
+  await assert.rejects(ensureSelfRoles(guild, store), /permissions or is managed/);
   assert.equal(createCalls.length, 0);
   assert.equal(privileged.name, toRoyalBold("Age · 18"));
   assert.equal(privileged.permissions.bitfield, PermissionFlagsBits.ManageRoles);
@@ -217,6 +218,7 @@ test("the self-role panel is edited on restart instead of duplicated", async (t)
   const history = new Collection();
   let sends = 0;
   let edits = 0;
+  let nextMessageId = BigInt(MESSAGE_ID);
   const channel = {
     id: CHANNEL_ID,
     guildId: GUILD_ID,
@@ -233,14 +235,21 @@ test("the self-role panel is edited on restart instead of duplicated", async (t)
     send: async (payload) => {
       sends += 1;
       const message = {
-        id: MESSAGE_ID,
+          id: String(nextMessageId++),
         author: { id: BOT_ID },
         embeds: payload.embeds.map((embed) => embed.toJSON()),
+          components: payload.components.map((component) => component.toJSON()),
+          reactions: [],
         edit: async (nextPayload) => {
           edits += 1;
           message.embeds = nextPayload.embeds.map((embed) => embed.toJSON());
+            message.components = nextPayload.components.map((component) => component.toJSON());
           return message;
         },
+          react: async (emoji) => {
+            if (!message.reactions.includes(emoji)) message.reactions.push(emoji);
+            return message;
+          },
       };
       history.set(message.id, message);
       return message;
@@ -248,13 +257,15 @@ test("the self-role panel is edited on restart instead of duplicated", async (t)
   };
   const client = { user: { id: BOT_ID } };
 
-  await ensureSelfRolePanel(channel, client, store, {});
-  await ensureSelfRolePanel(channel, client, store, {});
-  assert.equal(sends, 1);
-  assert.equal(edits, 1);
+  await ensureSelfRolePanels(channel, client, store, {});
+  await ensureSelfRolePanels(channel, client, store, {});
+  assert.equal(sends, 7);
+  assert.equal(edits, 7);
   assert.equal(store.getGuild(GUILD_ID).channelId, CHANNEL_ID);
   assert.equal(store.getGuild(GUILD_ID).messageId, MESSAGE_ID);
-  assert.equal(history.get(MESSAGE_ID).embeds[0].footer.text, SELF_ROLE_EMBED_FOOTER);
+  assert.deepEqual(Object.keys(store.getGuild(GUILD_ID).panelMessageIds), SELF_ROLE_PANEL_KEYS);
+  assert.equal(history.get(store.getPanelMessageId(GUILD_ID, "age")).components[0].components[0].options.length, 24);
+  assert.equal(history.get(store.getPanelMessageId(GUILD_ID, "hide-channels")).reactions.length, 1);
 });
 
 test("provisioning checks every required Discord permission before creating a channel", async (t) => {
@@ -263,6 +274,7 @@ test("provisioning checks every required Discord permission before creating a ch
     PermissionFlagsBits.SendMessages,
     PermissionFlagsBits.EmbedLinks,
     PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.AddReactions,
     PermissionFlagsBits.ManageChannels,
   ]) {
     const channelCache = new Collection();

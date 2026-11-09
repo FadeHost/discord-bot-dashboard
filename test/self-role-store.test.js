@@ -40,6 +40,11 @@ test("self-role channel, roles, and review tickets survive a new store instance"
         createdAt: restarted.getTicket(GUILD_ID, "941800000000000007").createdAt,
       },
     },
+    panelMessageIds: {},
+    reactionMappings: {},
+    ageSelections: {},
+    hideChannelsSelections: {},
+    underageAccess: {},
   });
   assert.equal(restarted.getOpenTicket(GUILD_ID, MEMBER_ID).channelId, "941800000000000007");
 
@@ -79,6 +84,40 @@ test("personal color role mappings persist and cannot reuse an approved role ID"
   assert.throws(() => store.setRoleId(GUILD_ID, "age:18", colorRoleId), /more than one self-role option/);
   store.setColorRoleId(GUILD_ID, MEMBER_ID, null);
   assert.equal(new SelfRoleStore(directory).getGuild(GUILD_ID).colorRoleIds[MEMBER_ID], undefined);
+});
+
+test("panel mappings, selected age, and underage permission snapshots persist", (t) => {
+  const directory = dataDirectory(t);
+  const store = new SelfRoleStore(directory);
+  store.setReactionPanelMessage(GUILD_ID, "intro", CHANNEL_ID, "941800000000000011");
+  store.setReactionPanelMessage(GUILD_ID, "age", CHANNEL_ID, "941800000000000012");
+  store.setReactionPanelMessage(GUILD_ID, "hide-channels", CHANNEL_ID, "941800000000000013", {
+    "🙈": "hide-nsfw",
+  });
+  store.setAgeSelection(GUILD_ID, MEMBER_ID, "under-18");
+  store.setHideChannelsSelection(GUILD_ID, MEMBER_ID, true);
+  store.saveUnderageChannelState(GUILD_ID, MEMBER_ID, CHANNEL_ID, "941800000000000014", {
+    hadOverwrite: false,
+    permissions: { ViewChannel: null },
+  });
+
+  const restarted = new SelfRoleStore(directory);
+  assert.equal(restarted.getPanelMessageId(GUILD_ID, "age"), "941800000000000012");
+  assert.equal(
+    restarted.getReactionMapping(GUILD_ID, "941800000000000013", "🙈"),
+    "hide-nsfw",
+  );
+  assert.equal(restarted.getAgeSelection(GUILD_ID, MEMBER_ID), "under-18");
+  assert.equal(restarted.getHideChannelsSelection(GUILD_ID, MEMBER_ID), true);
+  assert.deepEqual(restarted.getUnderageAccess(GUILD_ID, MEMBER_ID), {
+    supportChannelId: CHANNEL_ID,
+    channels: {
+      "941800000000000014": {
+        hadOverwrite: false,
+        permissions: { ViewChannel: null },
+      },
+    },
+  });
 });
 
 test("deleted channels clear only matching panel or ticket metadata", (t) => {
