@@ -90,7 +90,7 @@ export const SELF_ROLE_TICKET_MARKER = "sugar-ai:self-role-review";
 export const SELF_ROLE_PREFIX = "self-role:";
 export const SELF_ROLE_CLEAR_VALUE = "clear";
 export const SELF_ROLE_PINK = 0xf472b6;
-export const HIDE_CHANNELS_EMOJI = "🙈";
+export const HIDE_CHANNELS_EMOJI = "🔞";
 
 export function getSelfRolePanelFooter(panelKey) {
   if (!SELF_ROLE_PANEL_KEYS.includes(panelKey)) return null;
