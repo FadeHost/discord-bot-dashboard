@@ -4,18 +4,29 @@
 // server on PORT that the FadeHost web address puts on the internet.
 
 import { createBot } from "./src/bot.js";
+import { createDeepSeekClient } from "./src/deepseek.js";
+import { resolveDeploymentVersion } from "./src/deployment-version.js";
 import { SettingsStore, resolveDataDir } from "./src/settings.js";
+import { MemoryStore } from "./src/memory.js";
+import { PrivateChatStore } from "./src/private-chat-store.js";
+import { SelfRoleStore } from "./src/self-role-store.js";
+import { NsfwVisibilityStore } from "./src/nsfw-visibility-store.js";
+import { ModerationLogStore } from "./src/moderation-log-store.js";
+import { OnboardingGuideStore } from "./src/onboarding-guide-store.js";
 import { createWeb } from "./src/web.js";
 
+const STARTED_AT = new Date().toISOString();
+const VERSION = resolveDeploymentVersion();
 const PORT = Number(process.env.PORT || 8080);
 const DISCORD_TOKEN = (process.env.DISCORD_TOKEN || "").trim();
+const DEEPSEEK_API_KEY = (process.env.DEEPSEEK_API_KEY || "").trim();
 const DISCORD_CLIENT_ID = (process.env.DISCORD_CLIENT_ID || "").trim();
 const DISCORD_CLIENT_SECRET = (process.env.DISCORD_CLIENT_SECRET || "").trim();
 const SESSION_SECRET = (process.env.SESSION_SECRET || "").trim();
 const APP_URL = (process.env.APP_URL || "").trim() || undefined;
 
-function fatal(message) {
-  console.error(`[config] ${message}`);
+function fatal(message, category = "config") {
+  console.error(`[${category}] ${message}`);
   process.exit(1);
 }
 
@@ -35,11 +46,45 @@ if (SESSION_SECRET.length < 16) {
   fatal("SESSION_SECRET is missing or too short. Use at least 16 random characters: it signs the login cookie.");
 }
 
-const dataDir = resolveDataDir();
-const settings = new SettingsStore(dataDir);
+let dataDir;
+let settings;
+let memory;
+let privateChats;
+let selfRoles;
+let nsfwVisibility;
+let moderationLogs;
+let onboardingGuides;
+try {
+  dataDir = resolveDataDir();
+  settings = new SettingsStore(dataDir, { allowMissing: process.env.NODE_ENV === "development" });
+  memory = new MemoryStore(dataDir);
+  privateChats = new PrivateChatStore(dataDir);
+  selfRoles = new SelfRoleStore(dataDir);
+  nsfwVisibility = new NsfwVisibilityStore(dataDir);
+  moderationLogs = new ModerationLogStore(dataDir);
+  onboardingGuides = new OnboardingGuideStore(dataDir);
+} catch (error) {
+  fatal(error instanceof Error ? error.message : "Storage initialization failed.", "storage");
+}
 console.log(`[dashboard] settings in ${dataDir}/settings.json`);
 
-const client = createBot({ token: DISCORD_TOKEN, settings });
+const generateReply = DEEPSEEK_API_KEY ? createDeepSeekClient({ apiKey: DEEPSEEK_API_KEY }) : undefined;
+if (!generateReply) {
+  console.warn("[ai] DEEPSEEK_API_KEY is not set; AI replies are disabled.");
+}
+
+const client = createBot({
+  token: DISCORD_TOKEN,
+  applicationId: DISCORD_CLIENT_ID,
+  settings,
+  generateReply,
+  memory,
+  privateChats,
+  selfRoles,
+  nsfwVisibility,
+  moderationLogs,
+  onboardingGuides,
+});
 
 const { app, redirectUri } = createWeb({
   client,
@@ -50,6 +95,8 @@ const { app, redirectUri } = createWeb({
     sessionSecret: SESSION_SECRET,
     appUrl: APP_URL,
   },
+  version: VERSION,
+  startedAt: STARTED_AT,
 });
 
 // 0.0.0.0, because the web address reaches this container from outside it.

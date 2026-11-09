@@ -6,25 +6,44 @@ import path from "node:path";
 export const DEFAULT_WELCOME = "Welcome to {server}, {user}! You are member number {count}.";
 
 /**
- * A directory that survives a redeploy. On FadeHost that is /data; anywhere
- * else, ./data next to the app.
+ * Resolve persistent storage without hiding a production mount/config error.
+ * Local fallback and directory creation are limited to development.
  *
  * @param {string} [preferred]
  */
 export function resolveDataDir(preferred = process.env.DATA_DIR) {
-  const candidates = [preferred, "/data", path.resolve("data")].filter(Boolean);
+  const development = process.env.NODE_ENV === "development";
+  const configured = typeof preferred === "string" ? preferred.trim() : "";
+  const candidates = configured ? [configured] : development ? ["/data", path.resolve("data")] : ["/data"];
+  const failures = [];
 
   for (const dir of candidates) {
     try {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.accessSync(dir, fs.constants.W_OK);
+      if (development) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      if (!fs.statSync(dir).isDirectory()) {
+        const error = new Error("Data path is not a directory");
+        error.code = "ENOTDIR";
+        throw error;
+      }
+      fs.accessSync(dir, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
       return dir;
-    } catch {
-      // Try the next one.
+    } catch (error) {
+      failures.push(typeof error?.code === "string" ? error.code : "unavailable");
     }
   }
 
-  throw new Error(`No writable data directory. Tried: ${candidates.join(", ")}`);
+  const causes = [...new Set(failures)].join(", ");
+  if (!development) {
+    throw new Error(
+      `Persistent storage is unavailable${causes ? ` (${causes})` : ""}. Mount /data or set DATA_DIR to an existing, writable persistent directory. Startup stopped without changing stored settings.`,
+    );
+  }
+
+  throw new Error(
+    `No writable data directory is available${causes ? ` (${causes})` : ""}. Set DATA_DIR to a writable directory.`,
+  );
 }
 
 /** Everything one guild can be configured with. */
@@ -33,6 +52,8 @@ export function blankSettings() {
     welcomeChannelId: null,
     welcomeMessage: DEFAULT_WELCOME,
     logChannelId: null,
+    vipRoleIds: [],
+    moderatorRoleIds: [],
   };
 }
 
@@ -41,14 +62,40 @@ export function blankSettings() {
  * posts a form, and a form can say anything.
  *
  * @param {Record<string, unknown>} input
- * @returns {{welcomeChannelId: string|null, welcomeMessage: string, logChannelId: string|null}}
+ * @returns {{welcomeChannelId: string|null, welcomeMessage: string, logChannelId: string|null, vipRoleIds: string[], moderatorRoleIds: string[]}}
  */
 export function cleanSettings(input = {}) {
   return {
     welcomeChannelId: channelId(input.welcomeChannelId),
     welcomeMessage: String(input.welcomeMessage ?? DEFAULT_WELCOME).slice(0, 1500).trim() || DEFAULT_WELCOME,
     logChannelId: channelId(input.logChannelId),
+    vipRoleIds: parseRoleIds(input.vipRoleIds).ids,
+    moderatorRoleIds: parseRoleIds(input.moderatorRoleIds).ids,
   };
+}
+
+/** Parse role IDs entered as a comma-, space-, or newline-separated list. */
+export function parseRoleIds(value) {
+  const tokens = (Array.isArray(value) ? value : [value])
+    .flatMap((entry) => String(entry ?? "").split(/[,\s]+/u))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const ids = [];
+  const invalid = [];
+
+  for (const token of tokens) {
+    if (!/^\d{5,25}$/u.test(token)) {
+      invalid.push(token);
+    } else if (!ids.includes(token)) {
+      if (ids.length >= 20) {
+        invalid.push(token);
+      } else {
+        ids.push(token);
+      }
+    }
+  }
+
+  return { ids, invalid };
 }
 
 // Discord snowflakes are digits. Anything else means "off".
@@ -58,15 +105,23 @@ function channelId(value) {
 }
 
 export class SettingsStore {
-  /** @param {string} dataDir */
-  constructor(dataDir) {
+  /**
+   * @param {string} dataDir
+   * @param {{allowMissing?: boolean}} [options]
+   */
+  constructor(dataDir, { allowMissing = false } = {}) {
     this.file = path.join(dataDir, "settings.json");
-    this.data = this.#read();
+    this.data = this.#read(allowMissing);
   }
 
   /** @param {string} guildId */
   get(guildId) {
-    return { ...blankSettings(), ...(this.data[guildId] ?? {}) };
+    const settings = { ...blankSettings(), ...(this.data[guildId] ?? {}) };
+    return {
+      ...settings,
+      vipRoleIds: [...settings.vipRoleIds],
+      moderatorRoleIds: [...settings.moderatorRoleIds],
+    };
   }
 
   /**
@@ -84,13 +139,51 @@ export class SettingsStore {
     return Object.keys(this.data);
   }
 
-  #read() {
+  #read(allowMissing) {
+    let contents;
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.file, "utf8"));
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
+      contents = fs.readFileSync(this.file, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        try {
+          // A dangling symlink exists but cannot be read; do not treat it as a new install.
+          fs.lstatSync(this.file);
+        } catch (statError) {
+          if (statError?.code === "ENOENT") {
+            if (allowMissing) {
+              return {};
+            }
+            throw new Error(
+              "settings.json is missing. Startup stopped instead of initializing empty settings. Restore it or create an empty file only for a confirmed new installation.",
+            );
+          }
+          throw settingsReadError(statError);
+        }
+      }
+      throw settingsReadError(error);
     }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      throw new Error(
+        "settings.json is invalid JSON. Startup stopped without changing it; repair the file or restore a backup before restarting.",
+      );
+    }
+
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.values(parsed).some((settings) => !isStoredSettings(settings))
+    ) {
+      throw new Error(
+        "settings.json has an invalid structure. Startup stopped without changing it; repair the file or restore a backup before restarting.",
+      );
+    }
+
+    return parsed;
   }
 
   #write() {
@@ -100,6 +193,41 @@ export class SettingsStore {
     fs.writeFileSync(temporary, JSON.stringify(this.data, null, 2));
     fs.renameSync(temporary, this.file);
   }
+}
+
+function isStoredSettings(settings) {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return false;
+  }
+
+  return (
+    (settings.welcomeChannelId === undefined ||
+      settings.welcomeChannelId === null ||
+      typeof settings.welcomeChannelId === "string") &&
+    (settings.logChannelId === undefined ||
+      settings.logChannelId === null ||
+      typeof settings.logChannelId === "string") &&
+    (settings.welcomeMessage === undefined || typeof settings.welcomeMessage === "string") &&
+    isStoredRoleIds(settings.vipRoleIds) &&
+    isStoredRoleIds(settings.moderatorRoleIds)
+  );
+}
+
+function isStoredRoleIds(value) {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= 20 &&
+      value.every((id) => typeof id === "string" && /^\d{5,25}$/u.test(id)) &&
+      new Set(value).size === value.length)
+  );
+}
+
+function settingsReadError(error) {
+  const code = typeof error?.code === "string" ? ` (${error.code})` : "";
+  return new Error(
+    `Unable to read settings.json${code}. Startup stopped to protect existing settings; check storage permissions or restore a backup.`,
+  );
 }
 
 /**

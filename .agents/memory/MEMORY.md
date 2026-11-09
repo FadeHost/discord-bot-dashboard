@@ -1,0 +1,2 @@
+- [FadeHost DeepSeek setup](fadehost-deepseek.md) — the project API key was reported configured in FadeHost; never request or expose its value.
+- [Self-role age safety](self-role-age-safety.md) — self-selected age roles are never age verification or access control.

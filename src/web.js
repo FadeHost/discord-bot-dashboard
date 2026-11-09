@@ -16,6 +16,7 @@ import {
   timingSafeEqual,
 } from "./oauth.js";
 import { COOKIE, Sessions, clearCookie, readCookie, setCookie } from "./session.js";
+import { parseRoleIds } from "./settings.js";
 import { errorPage, guildListPage, guildPage, loginPage } from "./views.js";
 
 /**
@@ -25,8 +26,10 @@ import { errorPage, guildListPage, guildPage, loginPage } from "./views.js";
  * @param {import("discord.js").Client} options.client
  * @param {import("./settings.js").SettingsStore} options.settings
  * @param {{clientId: string, clientSecret: string, sessionSecret: string, appUrl: string|undefined}} options.config
+ * @param {string} options.version
+ * @param {string} options.startedAt
  */
-export function createWeb({ client, settings, config }) {
+export function createWeb({ client, settings, config, version, startedAt }) {
   const sessions = new Sessions(config.sessionSecret);
   const redirectUri = buildRedirectUri(config.appUrl);
   const secureCookies = Boolean(config.appUrl?.startsWith("https://"));
@@ -205,16 +208,30 @@ export function createWeb({ client, settings, config }) {
     // actually has are accepted.
     const allowed = new Set(postableChannels(client, found.guild.id).map((c) => c.id));
     const pick = (value) => (allowed.has(String(value)) ? String(value) : null);
+    const vipRoleIds = parseRoleIds(req.body?.vipRoleIds);
+    const moderatorRoleIds = parseRoleIds(req.body?.moderatorRoleIds);
+    if (vipRoleIds.invalid.length || moderatorRoleIds.invalid.length) {
+      res.status(400).type("html").send(
+        errorPage({
+          title: "Invalid role IDs",
+          message: "Use up to 20 valid Discord role IDs in each field, separated by commas or spaces.",
+        }),
+      );
+      return;
+    }
 
     const saved = settings.set(found.guild.id, {
       welcomeChannelId: pick(req.body?.welcomeChannelId),
       welcomeMessage: req.body?.welcomeMessage,
       logChannelId: pick(req.body?.logChannelId),
+      vipRoleIds: vipRoleIds.ids,
+      moderatorRoleIds: moderatorRoleIds.ids,
     });
 
     console.log(
       `[web] ${found.session.user.username} saved ${found.guild.name}: ` +
-        `welcome ${saved.welcomeChannelId ?? "off"}, log ${saved.logChannelId ?? "off"}`,
+        `welcome ${saved.welcomeChannelId ?? "off"}, log ${saved.logChannelId ?? "off"}, ` +
+        `VIP roles ${saved.vipRoleIds.length}, moderator roles ${saved.moderatorRoleIds.length}`,
     );
 
     res.redirect(`/g/${encodeURIComponent(found.guild.id)}?saved=1`);
@@ -222,10 +239,12 @@ export function createWeb({ client, settings, config }) {
 
   app.get("/health", (_req, res) => {
     res.json({
-      ok: Boolean(client.user),
+      ok: true,
       bot: botName(),
       guilds: client.guilds.cache.size,
       dashboard: Boolean(redirectUri),
+      version,
+      startedAt,
     });
   });
 

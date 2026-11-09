@@ -14,7 +14,14 @@ import {
   timingSafeEqual,
 } from "../src/oauth.js";
 import { Sessions, readCookie } from "../src/session.js";
-import { DEFAULT_WELCOME, SettingsStore, cleanSettings, renderWelcome, resolveDataDir } from "../src/settings.js";
+import {
+  DEFAULT_WELCOME,
+  SettingsStore,
+  cleanSettings,
+  parseRoleIds,
+  renderWelcome,
+  resolveDataDir,
+} from "../src/settings.js";
 import { escapeHtml, guildPage, loginPage } from "../src/views.js";
 
 function tempDir() {
@@ -138,10 +145,12 @@ test("readCookie picks one cookie out of the header", () => {
 
 test("settings survive a new store over the same directory, like a redeploy", () => {
   const dir = tempDir();
-  new SettingsStore(dir).set("941800000000000001", {
+  new SettingsStore(dir, { allowMissing: true }).set("941800000000000001", {
     welcomeChannelId: "941800000000000002",
     welcomeMessage: "Hi {user}",
     logChannelId: "941800000000000003",
+    vipRoleIds: ["941800000000000004"],
+    moderatorRoleIds: ["941800000000000005"],
   });
 
   const after = new SettingsStore(dir);
@@ -149,15 +158,19 @@ test("settings survive a new store over the same directory, like a redeploy", ()
     welcomeChannelId: "941800000000000002",
     welcomeMessage: "Hi {user}",
     logChannelId: "941800000000000003",
+    vipRoleIds: ["941800000000000004"],
+    moderatorRoleIds: ["941800000000000005"],
   });
 });
 
 test("a guild nobody configured gets the defaults", () => {
-  const settings = new SettingsStore(tempDir());
+  const settings = new SettingsStore(tempDir(), { allowMissing: true });
   assert.deepEqual(settings.get("999"), {
     welcomeChannelId: null,
     welcomeMessage: DEFAULT_WELCOME,
     logChannelId: null,
+    vipRoleIds: [],
+    moderatorRoleIds: [],
   });
 });
 
@@ -165,6 +178,35 @@ test("a channel id that is not a snowflake means off", () => {
   const clean = cleanSettings({ welcomeChannelId: "../../etc", logChannelId: "<script>", welcomeMessage: "Hi" });
   assert.equal(clean.welcomeChannelId, null);
   assert.equal(clean.logChannelId, null);
+});
+
+test("role IDs accept comma-separated snowflakes, remove duplicates, and reject invalid input", () => {
+  assert.deepEqual(parseRoleIds("941800000000000010, 941800000000000011\n941800000000000010"), {
+    ids: ["941800000000000010", "941800000000000011"],
+    invalid: [],
+  });
+  assert.deepEqual(parseRoleIds("moderator, 941800000000000012"), {
+    ids: ["941800000000000012"],
+    invalid: ["moderator"],
+  });
+  assert.deepEqual(parseRoleIds(""), { ids: [], invalid: [] });
+});
+
+test("the dashboard renders VIP and moderator role-ID settings", () => {
+  const html = guildPage({
+    guild: { id: "941800000000000001", name: "Test server" },
+    settings: cleanSettings({
+      vipRoleIds: ["941800000000000010"],
+      moderatorRoleIds: ["941800000000000011"],
+    }),
+    channels: [],
+    csrf: "csrf-token",
+  });
+
+  assert.match(html, /name="vipRoleIds"/);
+  assert.match(html, /name="moderatorRoleIds"/);
+  assert.match(html, /941800000000000010/);
+  assert.match(html, /941800000000000011/);
 });
 
 test("an empty welcome message falls back to the default", () => {
@@ -176,18 +218,100 @@ test("a huge welcome message is cut down", () => {
 });
 
 test("nothing outside the three known fields is stored", () => {
-  const settings = new SettingsStore(tempDir());
+  const settings = new SettingsStore(tempDir(), { allowMissing: true });
   const saved = settings.set("941800000000000001", {
     welcomeChannelId: "941800000000000002",
     token: "leak me",
   });
 
-  assert.deepEqual(Object.keys(saved).sort(), ["logChannelId", "welcomeChannelId", "welcomeMessage"]);
+  assert.deepEqual(Object.keys(saved).sort(), [
+    "logChannelId",
+    "moderatorRoleIds",
+    "vipRoleIds",
+    "welcomeChannelId",
+    "welcomeMessage",
+  ]);
+});
+
+test("corrupt settings stop loading without changing the file", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "settings.json");
+  const contents = '{"941800000000000001":';
+  fs.writeFileSync(file, contents);
+
+  assert.throws(() => new SettingsStore(dir), /settings\.json is invalid JSON/);
+  assert.equal(fs.readFileSync(file, "utf8"), contents);
+});
+
+test("missing settings stop production startup without creating a file", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "settings.json");
+
+  assert.throws(() => new SettingsStore(dir), /settings\.json is missing/);
+  assert.equal(fs.existsSync(file), false);
+});
+
+test("development may initialize empty settings when the file is missing", () => {
+  const dir = tempDir();
+  const settings = new SettingsStore(dir, { allowMissing: true });
+
+  assert.deepEqual(settings.get("941800000000000001"), {
+    welcomeChannelId: null,
+    welcomeMessage: DEFAULT_WELCOME,
+    logChannelId: null,
+    vipRoleIds: [],
+    moderatorRoleIds: [],
+  });
+  assert.equal(fs.existsSync(path.join(dir, "settings.json")), false);
+});
+
+test("settings with an invalid structure stop loading without being rewritten", () => {
+  const dir = tempDir();
+  const file = path.join(dir, "settings.json");
+  const contents = JSON.stringify({ "941800000000000001": ["not", "settings"] });
+  fs.writeFileSync(file, contents);
+
+  assert.throws(() => new SettingsStore(dir), /settings\.json has an invalid structure/);
+  assert.equal(fs.readFileSync(file, "utf8"), contents);
+});
+
+test("an unreadable settings path stops loading instead of using empty settings", () => {
+  const dir = tempDir();
+  fs.mkdirSync(path.join(dir, "settings.json"));
+
+  assert.throws(() => new SettingsStore(dir), /Unable to read settings\.json/);
+  assert.equal(fs.statSync(path.join(dir, "settings.json")).isDirectory(), true);
 });
 
 test("resolveDataDir uses the directory it is given", () => {
   const dir = tempDir();
   assert.equal(resolveDataDir(dir), dir);
+});
+
+test("production storage failure does not create or fall back from DATA_DIR", () => {
+  const previousCwd = process.cwd();
+  const previousNodeEnv = process.env.NODE_ENV;
+  const previousDataDir = process.env.DATA_DIR;
+  const root = tempDir();
+  const fallback = path.join(root, "data");
+  const missingStorage = path.join(root, "persistent-data");
+  fs.mkdirSync(fallback);
+
+  try {
+    process.chdir(root);
+    process.env.NODE_ENV = "production";
+    process.env.DATA_DIR = missingStorage;
+
+    assert.throws(() => resolveDataDir(), /Persistent storage is unavailable/);
+    assert.equal(fs.existsSync(missingStorage), false);
+    assert.equal(fs.statSync(fallback).isDirectory(), true);
+  } finally {
+    process.chdir(previousCwd);
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    if (previousDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDataDir;
+  }
 });
 
 // ---- the welcome message -------------------------------------------------

@@ -37,19 +37,25 @@ function stubClient() {
   };
 }
 
-async function start() {
+async function start(options = {}) {
+  const client = options.client ?? stubClient();
+  const version = options.version ?? "unknown";
+  const startedAt = options.startedAt ?? new Date().toISOString();
+  const appUrl = Object.hasOwn(options, "appUrl") ? options.appUrl : "http://127.0.0.1:0";
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-web-"));
-  const settings = new SettingsStore(dir);
+  const settings = new SettingsStore(dir, { allowMissing: true });
 
   const { app } = createWeb({
-    client: stubClient(),
+    client,
     settings,
     config: {
       clientId: "123456",
       clientSecret: "shh",
       sessionSecret: "a-long-enough-session-secret",
-      appUrl: "http://127.0.0.1:0",
+      appUrl,
     },
+    version,
+    startedAt,
   });
 
   const server = await new Promise((resolve) => {
@@ -125,15 +131,45 @@ test("saving without signing in does nothing", async () => {
   await close();
 });
 
-test("health says whether the bot is up and the dashboard has an address", async () => {
-  const { base, close } = await start();
+test("health reports runtime identity and dashboard state independently of bot status", async () => {
+  const client = stubClient();
+  client.user = null;
+  const version = "a".repeat(40);
+  const startedAt = "2026-11-06T12:34:56.000Z";
+  const { base, close } = await start({ client, version, startedAt });
 
-  const body = await (await fetch(`${base}/health`)).json();
+  const response = await fetch(`${base}/health`);
+  const body = await response.json();
 
-  assert.equal(body.ok, true);
-  assert.equal(body.bot, "Warden");
-  assert.equal(body.guilds, 1);
-  assert.equal(body.dashboard, true);
+  assert.equal(response.status, 200);
+  assert.deepEqual(body, {
+    ok: true,
+    bot: null,
+    guilds: 1,
+    dashboard: true,
+    version,
+    startedAt,
+  });
+
+  await close();
+});
+
+test("health reports unknown version and an unavailable dashboard when not configured", async () => {
+  const startedAt = "2026-11-06T12:34:56.000Z";
+  const { base, close } = await start({ version: "unknown", startedAt, appUrl: undefined });
+
+  const response = await fetch(`${base}/health`);
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body, {
+    ok: true,
+    bot: "Warden",
+    guilds: 1,
+    dashboard: false,
+    version: "unknown",
+    startedAt,
+  });
 
   await close();
 });

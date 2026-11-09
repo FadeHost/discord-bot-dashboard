@@ -42,22 +42,55 @@ anybody back to an address you have not listed.
 | `DISCORD_CLIENT_ID` | yes | From the **OAuth2** page of the same application. |
 | `DISCORD_CLIENT_SECRET` | yes | From the **OAuth2** page. Treat it like a password. |
 | `SESSION_SECRET` | yes | Any long random string. It signs the login cookie. |
+| `DEEPSEEK_API_KEY` | no | Optional. Enables AI replies when set. |
 | `APP_URL` | no | The public address. FadeHost sets it when the web address is on. Set it yourself when running elsewhere. |
 | `PORT` | no | The port to listen on. FadeHost sets this for you. |
+| `DATA_DIR` | no | An existing, writable persistent directory for settings. Production defaults to `/data`. |
+| `NODE_ENV` | no | Set to `development` for local data-directory fallback; other modes require persistent storage. |
 
 Without `APP_URL` the bot still runs; the dashboard just says it has nowhere
 for Discord to send people back to.
 
+## Private chats
+
+The bot registers `/priv-chat` for the server containing channel
+`1568179043356901376`. In that channel, use **Create private chat** or
+`/priv-chat create name:<name>`; creation can include up to five invitees.
+New channels use the existing category whose name resolves to **General**,
+including decorative Unicode lettering.
+
+The channel owner can add or remove invitees and rename the chat. Invitees can
+leave. Deletion requires an owner confirmation and permanently removes the
+channel and its messages. Access for each channel is managed through Discord
+permission overwrites. Chat ownership and invitees are stored in
+`private-chats.json` under the persistent `DATA_DIR`.
+
+The bot needs permission to create and manage channels in the target server.
+On startup it posts and pins one guide in the lobby, and keeps unrelated
+application slash commands when registering `/priv-chat`.
+
+### Keeping secrets out of the project
+
+The app reads variables from its process environment; it does not load `.env`
+files. Set production secrets in the host's secret or environment-variable
+manager. `.env.example` contains names and empty values only. Local `.env*`
+files and `.envrc` are ignored by Git, and backup archives exclude them.
+Never place secret values in GitHub, project documents, or backup archives.
+
 ## Run it somewhere else
 
 ```bash
-npm install
-DISCORD_TOKEN=... DISCORD_CLIENT_ID=... DISCORD_CLIENT_SECRET=... \
-SESSION_SECRET=$(openssl rand -hex 32) APP_URL=http://localhost:8080 npm start
+npm ci
+npm start
 ```
 
-Add `http://localhost:8080/auth/callback` to the redirects in the Developer
-Portal while you are testing. Node 20 or newer.
+Before starting, provide the required environment variables through your
+operating system or host's secure environment-variable manager. Generate a
+long random `SESSION_SECRET`; do not put secret values in shell history or
+project files. Add `http://localhost:8080/auth/callback` to the redirects in
+the Developer Portal while testing. For local development, run
+`NODE_ENV=development npm start`; production requires an existing `DATA_DIR`
+or a mounted `/data` directory. Node 20 or newer.
 
 ## The welcome message
 
@@ -67,6 +100,11 @@ Portal while you are testing. Node 20 or newer.
 | `{username}` | their name, without the mention |
 | `{server}` | your server's name |
 | `{count}` | how many members there are now |
+
+Sugar also posts a separate AI-personalized welcome in channel
+`1567093021298794658` when someone joins the server that owns that channel. It
+uses their display name, server roles, account creation date and server join
+date as limited context, and only pings the new member.
 
 ## Who can change things
 
@@ -84,7 +122,105 @@ clicks to fix and means there is nothing on disk worth stealing.
 
 ```
 /data/settings.json   one entry per server: the two channels and the message
+/data/memory.json     bounded per-guild, per-user conversation history
+/data/private-chats.json   private-chat owners, invitees, and lobby guide IDs
+/data/onboarding-guide.json the reusable #start onboarding guide message ID
+/data/nsfw-visibility.json member-specific visibility overrides for age-restricted channels
 ```
+
+Production startup requires this file to exist; it will not initialize empty
+settings automatically. Only local development can start without it. For a
+confirmed new production installation, create `{}` in the persistent data
+directory before starting. Do not do this when restoring an existing install.
+The onboarding guide file is initialized if it is missing. If it is malformed,
+startup stops without rewriting it; repair it or restore it from a backup.
+
+## Backup and recovery
+
+The app currently has no database. Its durable application data is
+`settings.json`, `memory.json`, `private-chats.json`, `moderation-logs.json`,
+`onboarding-guide.json`, `self-roles.json`, and `nsfw-visibility.json` under
+`DATA_DIR`.
+Point `DATA_DIR` at a persistent disk or mounted directory on the host. Outside
+`NODE_ENV=development`, the app only uses an existing `DATA_DIR` or `/data` and
+stops if that storage is unavailable; it never switches to `./data`. Local
+development may fall back to `./data`. A writable path is not necessarily
+persistent, so confirm the chosen disk survives host restarts and redeploys.
+
+## Self-role picker
+
+On startup, the bot provisions the styled self-role channel only in the server
+containing the configured onboarding welcome channel. It reuses the saved
+bot-owned panel message. The five approved categories are Age, Gender,
+Sexuality, Interests, and Color. Individual role options remain disabled until
+they are approved; the bot does not create unapproved option roles.
+
+Self-selected age is never age verification and never grants access to
+age-restricted channels. Color supports a custom six-digit hex value through a
+permissionless personal role, only when the bot has Manage Roles and the role
+hierarchy allows it. Self-role metadata is kept in `self-roles.json`; corrupt
+data stops startup instead of being overwritten.
+
+## NSFW channel visibility
+
+The self-role panel includes an **Age-restricted channels** select menu with
+**Show NSFW channels** and **Hide NSFW channels** actions. Sugar only changes
+the member's View Channel overwrite for channels Discord already marks as
+age-restricted. Showing restores the saved prior permission state; it never
+grants new access or changes Discord's native age-restricted setting. The bot
+needs Manage Channels on each channel it can update. Visibility records are
+kept in `nsfw-visibility.json`. On startup, Sugar removes the retired
+`/show-hide` guild command while preserving other application commands.
+
+GitHub `main` stores the source history. To make a portable snapshot of the
+project files and current data, run this from the project directory:
+
+```bash
+bash scripts/backup.sh
+```
+
+The archive is written to `~/sugar-backups` by default. To choose another
+location outside the project, pass it as the first argument:
+
+```bash
+bash scripts/backup.sh /path/to/private-backups
+```
+
+For FadeHost, use a directory under `/data` so the archive appears in the app's
+Files tab and can be downloaded:
+
+```bash
+bash scripts/backup.sh /data/sugar-backups
+```
+
+The backup includes the project files needed to run the app and each of
+`DATA_DIR/settings.json`, `DATA_DIR/memory.json`, `DATA_DIR/private-chats.json`,
+`DATA_DIR/moderation-logs.json`, `DATA_DIR/onboarding-guide.json`, and
+`DATA_DIR/self-roles.json`, and `DATA_DIR/nsfw-visibility.json` when present.
+Missing data files are not created or added as empty files. The restore script
+extracts every archived file, including these data files, into a new directory;
+it does not write to `DATA_DIR` or modify the live installation. It refuses to extract into an existing
+directory. It excludes Git internals, installed packages, temporary caches,
+environment files, and common credential files. Store the downloaded archive
+somewhere separate from the host that runs the bot.
+
+To inspect and recover a snapshot, extract it into a new, empty directory:
+
+```bash
+bash scripts/restore.sh /path/to/sugar-ai-YYYYMMDDTHHMMSSZ.tar.gz
+```
+
+An optional second argument selects the restore directory. The script refuses
+to overwrite an existing directory or extract into the live project. Review
+`BACKUP-INFO.txt` and the restored `data/` before using them. To recover data
+for an existing installation, first make and verify a separate backup, then
+review and copy only the needed files; never extract over an existing data
+directory. For a new host,
+check out the GitHub `main` branch, install with `npm ci`, set the required
+secrets in that host's secret manager, and point `DATA_DIR` at a persistent
+directory. Restore data only into an empty data directory; preserve any
+existing host data before attempting a recovery. Do not copy secrets from an
+archive: they are intentionally not included.
 
 ## Tests
 
