@@ -211,8 +211,8 @@ export function buildAgeSelectionRow(roleIds = {}, member = null) {
     const definition = getSelfRoleDefinition(`age:${option.key}`);
     const item = new StringSelectMenuOptionBuilder()
       .setLabel(toRoyalBold(option.label))
-      .setValue(option.key)
-      .setEmoji(option.emoji);
+      .setValue(option.key);
+    if (option.emoji) item.setEmoji(option.emoji);
     const roleId = roleIds[definition.key];
     if (roleId && member?.roles?.cache?.has?.(roleId)) item.setDefault(true);
     return item;
@@ -234,7 +234,6 @@ export function buildSelfRolePanelPayloads(roleIds = {}) {
       .setDescription(description)
       .setFooter({ text: getSelfRolePanelFooter(panelKey) });
   const age = getSelfRoleCategory("age");
-  const ageOptions = age.options.map((option) => `${option.emoji}  ${toRoyalBold(option.label)}`).join("\n");
   const inactivePanels = SELF_ROLE_CATEGORIES
     .filter(({ key }) => ["gender", "sexuality", "interests", "color"].includes(key))
     .map((category) => ({
@@ -277,12 +276,7 @@ export function buildSelfRolePanelPayloads(roleIds = {}) {
           makeEmbed(
             "age",
             "Age",
-            [
-              "Select one option below. Choosing a different age replaces your previous Age role.",
-              "Age is self-declared, not age verification. Selecting 18- limits visibility to #support; it never grants access to age-restricted channels.",
-              "",
-              ageOptions,
-            ].join("\n"),
+"Please select your age.",
           ),
         ],
         components: [buildAgeSelectionRow(roleIds)],
