@@ -14,7 +14,6 @@ import {
 } from "discord.js";
 
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
-import { ONBOARDING_CHANNEL_ID } from "./onboarding.js";
 import {
   SELF_ROLE_CATEGORIES,
   SELF_ROLE_CLEAR_VALUE,
@@ -24,7 +23,7 @@ import {
   getSelfRoleCategory,
   getSelfRoleDefinition,
 } from "./self-role-catalog.js";
-import { MAX_GUILD_ROLES, provisionSelfRoleGuild } from "./self-role-provisioning.js";
+import { isSelfRoleChannelName, MAX_GUILD_ROLES, provisionSelfRoleGuild } from "./self-role-provisioning.js";
 
 const MEMBER_ROLE_PERMISSIONS = [
   PermissionFlagsBits.ViewChannel,
@@ -52,17 +51,30 @@ export function attachSelfRoleSystem(client, { store }) {
 
   let readyHandled = false;
   let targetGuildId = null;
+  let targetGuildSetup = null;
+  const queueTargetGuildSetup = () => {
+    if (!targetGuildSetup) {
+      targetGuildSetup = resolveAndProvisionTargetGuild(client, store)
+        .then((guildId) => {
+          targetGuildId = guildId;
+          return guildId;
+        })
+        .finally(() => {
+          targetGuildSetup = null;
+        });
+    }
+    return targetGuildSetup;
+  };
+
   client.once(Events.ClientReady, () => {
     readyHandled = true;
-    return resolveAndProvisionTargetGuild(client, store).then((guildId) => {
-      targetGuildId = guildId;
-    });
+    return queueTargetGuildSetup();
   });
 
   client.on(Events.GuildCreate, (guild) => {
-    if (!readyHandled || guild.id !== targetGuildId) return;
-    void provisionGuild(guild, client, store).catch((error) => {
-      console.error(`[self-roles] setup failed in guild ${guild.id}: ${error.message}`);
+    if (!readyHandled || (targetGuildId && guild.id !== targetGuildId)) return;
+    void queueTargetGuildSetup().catch((error) => {
+      console.error(`[self-roles] setup failed after joining guild ${guild.id}: ${error.message}`);
     });
   });
 
@@ -79,30 +91,52 @@ export function attachSelfRoleSystem(client, { store }) {
   client.on(Events.InteractionCreate, (interaction) => {
     if (!isSelfRoleInteraction(interaction)) return;
     void handleSelfRoleInteraction(interaction, { client, store }).catch(async (error) => {
-      console.error(
-        `[self-roles] interaction failed in guild ${interaction.guildId ?? "unknown"}: ${error.message}`,
-      );
+      console.error(`[self-roles] interaction failed in guild ${interaction.guildId ?? "unknown"}: ${error.message}`);
       await replyWithError(interaction, safeErrorMessage(error));
     });
   });
 }
 
+export async function resolveTargetGuild(client) {
+  const guilds = [...(client.guilds?.cache?.values?.() ?? [])];
+  if (guilds.length === 1) return guilds[0];
+  if (!guilds.length) return null;
+
+  const matchingGuilds = [];
+  for (const guild of guilds) {
+    let channels;
+    try {
+      channels = await guild.channels.fetch();
+    } catch (error) {
+      console.warn(`[self-roles] could not inspect channels in guild ${guild.id}; target selection is ambiguous (${error?.code ?? "unknown error"})`);
+      return null;
+    }
+    if (!channels?.values) {
+      console.warn(`[self-roles] channel inventory is unavailable in guild ${guild.id}; target selection is ambiguous`);
+      return null;
+    }
+    if ([...channels.values()].some((channel) => isSelfRoleChannelName(channel?.name))) {
+      matchingGuilds.push(guild);
+      if (matchingGuilds.length > 1) return null;
+    }
+  }
+  return matchingGuilds.length === 1 ? matchingGuilds[0] : null;
+}
+
 async function resolveAndProvisionTargetGuild(client, store) {
   try {
-    const targetChannel = await client.channels.fetch(ONBOARDING_CHANNEL_ID);
-    const guild = targetChannel?.guild ?? client.guilds.cache.get(targetChannel?.guildId);
+    const guild = await resolveTargetGuild(client);
     if (!guild) {
-      console.error(`[self-roles] could not resolve the welcome server from channel ${ONBOARDING_CHANNEL_ID}`);
+      console.error("[self-roles] no unique target server could be identified; skipping setup");
       return null;
     }
     await provisionGuild(guild, client, store);
     return guild.id;
   } catch (error) {
-    console.error(`[self-roles] could not locate the welcome server (${error?.code ?? "unknown error"})`);
+    console.error(`[self-roles] could not resolve the target server (${error?.code ?? "unknown error"})`);
     return null;
   }
 }
-
 export async function provisionGuild(guild, client, store) {
   return runQueued(channelSetupQueues, guild.id, async () => {
     try {

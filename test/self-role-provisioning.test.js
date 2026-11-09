@@ -14,6 +14,7 @@ import {
   ensureSelfRoleChannel,
   ensureSelfRolePanel,
   ensureSelfRoles,
+  provisionSelfRoleGuild,
 } from "../src/self-role-provisioning.js";
 import { SelfRoleStore } from "../src/self-role-store.js";
 
@@ -254,4 +255,59 @@ test("the self-role panel is edited on restart instead of duplicated", async (t)
   assert.equal(store.getGuild(GUILD_ID).channelId, CHANNEL_ID);
   assert.equal(store.getGuild(GUILD_ID).messageId, MESSAGE_ID);
   assert.equal(history.get(MESSAGE_ID).embeds[0].footer.text, SELF_ROLE_EMBED_FOOTER);
+});
+
+test("provisioning checks every required Discord permission before creating a channel", async (t) => {
+  for (const deniedPermission of [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.EmbedLinks,
+    PermissionFlagsBits.ReadMessageHistory,
+    PermissionFlagsBits.ManageChannels,
+  ]) {
+    const channelCache = new Collection();
+    const checkedPermissions = [];
+    let createCalls = 0;
+    const guild = {
+      id: GUILD_ID,
+      members: {
+        me: {
+          permissions: {
+            has(permission) {
+              checkedPermissions.push(permission);
+              return permission !== deniedPermission;
+            },
+          },
+        },
+      },
+      channels: {
+        fetch: async () => channelCache,
+        create: async () => { createCalls += 1; },
+      },
+    };
+    const store = new SelfRoleStore(directory(t));
+    assert.equal(await provisionSelfRoleGuild(guild, { user: { id: BOT_ID } }, store), false);
+    assert.equal(createCalls, 0);
+    assert.ok(checkedPermissions.includes(deniedPermission));
+  }
+});
+
+test("provisioning fails closed when the bot permission inventory is unavailable", async (t) => {
+  const channelCache = new Collection();
+  let createCalls = 0;
+  const guild = {
+    id: GUILD_ID,
+    channels: {
+      fetch: async () => channelCache,
+      create: async () => { createCalls += 1; },
+    },
+  };
+  const originalConsoleWarn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(await provisionSelfRoleGuild(guild, { user: { id: BOT_ID } }, new SelfRoleStore(directory(t))), false);
+  } finally {
+    console.warn = originalConsoleWarn;
+  }
+  assert.equal(createCalls, 0);
 });
