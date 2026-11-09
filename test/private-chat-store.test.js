@@ -138,7 +138,7 @@ test("legacy private-chat records without protected message IDs load without bei
 
 test("private-chat names use Discord-safe formatting and match decorative General categories", () => {
   assert.equal(normalizePrivateChatLabel("Brian Moser"), "brian-moser");
-  assert.equal(formatPrivateChatChannelName("Brian Moser"), "👤｜9e—𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻—9e°♡");
+  assert.equal(formatPrivateChatChannelName("Brian Moser"), "👤｜୨୧•𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻");
   assert.equal(normalizeCategoryName("୨୧ ─────── 𝓖𝓮𝓷𝓮𝓻𝓪𝓵 ─────── ୨୧"), "general");
   assert.throws(() => normalizePrivateChatLabel("🎀"), /letter or number/);
 });
@@ -148,7 +148,7 @@ test("the lobby creation guide keeps its buttons and uses the 👤 name example"
   const description = payload.embeds[0].data.description;
 
   assert.equal(payload.embeds[0].data.title, `${toRoyalBold("Create Private Chat")} 🎀`);
-  assert.match(description, /👤｜9e—your-text—9e°♡/);
+  assert.match(description, /👤｜୨୧•your-text/u);
   assert.doesNotMatch(description, new RegExp(toRoyalBold("Create a private chat")));
   assert.match(description, /• Use a button to create a private chat/u);
   assert.ok(
@@ -316,7 +316,7 @@ test("successful private-chat creation posts welcome and command embeds only in 
   assert.ok(!fixture.events.some((event) => event.type === "unexpected-channel-fetch"));
   assert.equal(
     fixture.events.find((event) => event.type === "channel-created").options.name,
-    "👤｜9e—𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻—9e°♡",
+    "👤｜୨୧•𝓫𝓻𝓲𝓪𝓷-𝓶𝓸𝓼𝓮𝓻",
   );
 });
 
@@ -520,7 +520,7 @@ test("renaming updates the channel before posting a private activity notice", as
   await renamePrivateChat(channel, { displayName: "Old name" }, "New name", store);
 
   assert.deepEqual(events.map((event) => event.type), ["renamed", "activity"]);
-  assert.equal(events[0].name, "👤｜9e—𝓷𝓮𝔀-𝓷𝓪𝓶𝓮—9e°♡");
-  assert.match(events[1].payload.content, /👤｜9e—𝓷𝓮𝔀-𝓷𝓪𝓶𝓮—9e°♡/);
+  assert.equal(events[0].name, "👤｜୨୧•𝓷𝓮𝔀-𝓷𝓪𝓶𝓮");
+  assert.match(events[1].payload.content, /👤｜୨୧•𝓷𝓮𝔀-𝓷𝓪𝓶𝓮/u);
   assert.deepEqual(events[1].payload.allowedMentions, { parse: [] });
 });

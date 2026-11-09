@@ -294,7 +294,7 @@ export function buildPrivateChatLobbyGuidePayload() {
         "• Use a button to create a private chat, or run `/priv-chat create` and provide a name. You can optionally invite up to five people.",
         "",
         toRoyalBold("Name format"),
-        "`👤｜9e—your-text—9e°♡`",
+        "`👤｜୨୧•your-text`",
         "",
         "Instructions inside the chat are available from the **Commands** button or `/priv-chat commands`.",
       ].join("\n"),

@@ -26,7 +26,7 @@ export function normalizePrivateChatLabel(value) {
 }
 
 export function formatPrivateChatChannelName(displayName) {
-  return `👤｜9e—${toRoyalBold(normalizePrivateChatLabel(displayName))}—9e°♡`;
+  return `👤｜୨୧•${toRoyalBold(normalizePrivateChatLabel(displayName))}`;
 }
 
 /** Ignore decorative marks and compatibility-font lettering such as math script. */
