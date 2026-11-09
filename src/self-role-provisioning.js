@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder } from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, PermissionFlagsBits } from "discord.js";
 
 import { formatEmbedTitle, toRoyalBold } from "./embed-format.js";
 import { buildNsfwVisibilityControlRow } from "./nsfw-visibility-system.js";
@@ -21,7 +21,35 @@ const SELF_ROLE_CHANNEL_ALIASES = new Set(["self-roles", "self roles", "selfrole
 const ROLE_SETUP_REASON = "Provision the approved Sugar AI self-role picker";
 
 export async function provisionSelfRoleGuild(guild, client, store) {
-  const channel = await ensureSelfRoleChannel(guild);
+  const inventory = await fetchSelfRoleChannelInventory(guild);
+  if (!inventory) return false;
+
+  const matches = getSelfRoleChannelMatches(inventory);
+  const textMatches = matches
+    .filter((channel) => TEXT_CHANNEL_TYPES.has(channel.type))
+    .sort((left, right) => selfRoleChannelPreference(left) - selfRoleChannelPreference(right));
+  const selectedChannel = textMatches[0];
+  const needsCreate = matches.length === 0;
+  const needsRename =
+    matches.length === 1 &&
+    selectedChannel &&
+    selectedChannel.name !== SELF_ROLE_CHANNEL_NAME &&
+    typeof selectedChannel.setName === "function";
+  const requiredPermissions = [
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.EmbedLinks,
+    PermissionFlagsBits.ReadMessageHistory,
+  ];
+  if (needsCreate || needsRename) requiredPermissions.push(PermissionFlagsBits.ManageChannels);
+  if (getProvisionableRoleDefinitions().length) requiredPermissions.push(PermissionFlagsBits.ManageRoles);
+
+  if (!(await botHasPermissions(guild, requiredPermissions))) {
+    console.warn(`[self-roles] bot is missing a required permission in guild ${guild.id}; setup was skipped`);
+    return false;
+  }
+
+  const channel = await ensureSelfRoleChannel(guild, inventory);
   if (!channel) return false;
 
   const roleIds = await ensureSelfRoles(guild, store);
@@ -29,22 +57,11 @@ export async function provisionSelfRoleGuild(guild, client, store) {
   return true;
 }
 
-export async function ensureSelfRoleChannel(guild) {
-  let inventory;
-  try {
-    inventory = await guild.channels.fetch();
-  } catch (error) {
-    console.warn(
-      `[self-roles] could not list channels in guild ${guild.id}; skipping creation to avoid duplicates (${error?.code ?? "unknown error"})`,
-    );
-    return null;
-  }
-  if (!inventory?.values) {
-    console.warn(`[self-roles] channel inventory is unavailable in guild ${guild.id}; skipping setup`);
-    return null;
-  }
+export async function ensureSelfRoleChannel(guild, knownInventory = null) {
+  const inventory = knownInventory ?? (await fetchSelfRoleChannelInventory(guild));
+  if (!inventory) return null;
 
-  const matches = [...inventory.values()].filter((channel) => isSelfRoleChannelName(channel.name));
+  const matches = getSelfRoleChannelMatches(inventory);
   const textMatches = matches
     .filter((channel) => TEXT_CHANNEL_TYPES.has(channel.type))
     .sort((left, right) => selfRoleChannelPreference(left) - selfRoleChannelPreference(right));
@@ -52,25 +69,19 @@ export async function ensureSelfRoleChannel(guild) {
   if (textMatches.length) {
     let channel = textMatches[0];
     if (matches.length > 1) {
-      console.warn(
-        `[self-roles] multiple channels match the self-role channel in guild ${guild.id}; reusing one without changing the others`,
-      );
+      console.warn(`[self-roles] multiple channels match the self-role channel in guild ${guild.id}; reusing one without changing the others`);
     } else if (channel.name !== SELF_ROLE_CHANNEL_NAME && typeof channel.setName === "function") {
       try {
         channel = (await channel.setName(SELF_ROLE_CHANNEL_NAME, "Apply Kittisugar self-role channel naming")) ?? channel;
       } catch (error) {
-        console.warn(
-          `[self-roles] could not restyle the existing self-role channel in guild ${guild.id}; reusing it (${error?.code ?? "unknown error"})`,
-        );
+        console.warn(`[self-roles] could not restyle the existing self-role channel in guild ${guild.id}; reusing it (${error?.code ?? "unknown error"})`);
       }
     }
     return channel;
   }
 
   if (matches.length) {
-    console.warn(
-      `[self-roles] a non-text channel matches the self-role channel in guild ${guild.id}; leaving it unchanged`,
-    );
+    console.warn(`[self-roles] a non-text channel matches the self-role channel in guild ${guild.id}; leaving it unchanged`);
     return null;
   }
 
@@ -81,14 +92,14 @@ export async function ensureSelfRoleChannel(guild) {
       reason: "Create Sugar AI's member self-role channel",
     });
   } catch (error) {
-    console.error(
-      `[self-roles] could not create the self-role channel in guild ${guild.id} (${error?.code ?? "unknown error"})`,
-    );
+    console.error(`[self-roles] could not create the self-role channel in guild ${guild.id} (${error?.code ?? "unknown error"})`);
     return null;
   }
 }
-
 export async function ensureSelfRoles(guild, store) {
+  const definitions = getProvisionableRoleDefinitions();
+  if (!definitions.length) return {};
+
   let roles;
   try {
     roles = await guild.roles.fetch();
@@ -97,14 +108,6 @@ export async function ensureSelfRoles(guild, store) {
   }
   if (!roles?.values) throw new Error(`Role inventory is unavailable in guild ${guild.id}; self-role setup was stopped.`);
 
-  const definitions = SELF_ROLE_CATEGORIES.flatMap((category) =>
-      category.options.map((option) => getSelfRoleDefinition(`${category.key}:${option.key}`)),
-    );
-  if (!definitions.length) return {};
-
-  if (getSelfRoleCategory("age")?.options.some((option) => option.key === "under-18")) {
-    definitions.push({ key: SELF_ROLE_STAFF_KEY, name: SELF_ROLE_STAFF_NAME, color: null });
-  }
   const current = store.getGuild(guild.id);
   const matches = new Map();
 
@@ -278,9 +281,53 @@ function isManagedPanel(message, botId) {
   );
 }
 
-function isSelfRoleChannelName(name) {
+export function isSelfRoleChannelName(name) {
   const normalized = normalizeSelfRoleName(name).replace(/[୨୧]/gu, "");
   return [...SELF_ROLE_CHANNEL_ALIASES].some((alias) => normalizeSelfRoleName(alias) === normalized);
+}
+
+function getSelfRoleChannelMatches(inventory) {
+  return [...inventory.values()].filter((channel) => isSelfRoleChannelName(channel.name));
+}
+
+async function fetchSelfRoleChannelInventory(guild) {
+  try {
+    const inventory = await guild.channels.fetch();
+    if (inventory?.values) return inventory;
+    console.warn(`[self-roles] channel inventory is unavailable in guild ${guild.id}; skipping setup`);
+  } catch (error) {
+    console.warn(`[self-roles] could not list channels in guild ${guild.id}; skipping creation to avoid duplicates (${error?.code ?? "unknown error"})`);
+  }
+  return null;
+}
+
+function getProvisionableRoleDefinitions() {
+  const definitions = SELF_ROLE_CATEGORIES.flatMap((category) =>
+    category.options
+      .map((option) => getSelfRoleDefinition(`${category.key}:${option.key}`))
+      .filter(Boolean),
+  );
+  if (getSelfRoleCategory("age")?.options.some((option) => option.key === "under-18")) {
+    definitions.push({ key: SELF_ROLE_STAFF_KEY, name: SELF_ROLE_STAFF_NAME, color: null });
+  }
+  return definitions;
+}
+
+async function botHasPermissions(guild, requiredPermissions) {
+  let botMember = guild.members?.me;
+  if (!botMember && typeof guild.members?.fetchMe === "function") {
+    try {
+      botMember = await guild.members.fetchMe();
+    } catch {
+      return false;
+    }
+  }
+  if (!botMember?.permissions?.has) return false;
+  try {
+    return requiredPermissions.every((permission) => botMember.permissions.has(permission));
+  } catch {
+    return false;
+  }
 }
 
 function selfRoleChannelPreference(channel) {

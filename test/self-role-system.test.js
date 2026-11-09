@@ -8,6 +8,8 @@ import { Collection, Events, PermissionFlagsBits } from "discord.js";
 import { toRoyalBold } from "../src/embed-format.js";
 import {
   SELF_ROLE_CATEGORIES,
+  SELF_ROLE_CHANNEL_NAME,
+  SELF_ROLE_EMBED_FOOTER,
   SELF_ROLE_STAFF_NAME,
 } from "../src/self-role-catalog.js";
 import {
@@ -16,10 +18,11 @@ import {
   buildReviewTicketPayload,
   buildReviewTicketPermissionOverwrites,
   buildSelfRoleSelectionRow,
+  provisionGuild,
+  resolveTargetGuild,
 } from "../src/self-role-system.js";
 import { buildSelfRolePickerPayload } from "../src/self-role-provisioning.js";
 import { SelfRoleStore } from "../src/self-role-store.js";
-import { ONBOARDING_CHANNEL_ID } from "../src/onboarding.js";
 
 const GUILD_ID = "941800000000000001";
 const MEMBER_ID = "941800000000000002";
@@ -186,62 +189,138 @@ test("review-ticket embed clearly states self-declaration and offers a close con
   assert.match(payload.content, new RegExp(`<@&${STAFF_ROLE_ID}>`));
 });
 
-test("startup provisions only the server identified by the onboarding welcome channel", async (t) => {
-  const store = new SelfRoleStore(fs.mkdtempSync(path.join(os.tmpdir(), "self-role-target-test-")));
-  t.after(() => fs.rmSync(path.dirname(store.file), { recursive: true, force: true }));
-  const targetChannels = new Collection();
-  const created = [];
-  let otherFetches = 0;
-  const targetGuild = {
-    id: GUILD_ID,
+function makeProvisioningGuild(guildId, { existingChannel = false, inventoryError = false } = {}) {
+  const channelCache = new Collection();
+  const history = new Collection();
+  const createdChannels = [];
+  const channelId = guildId === GUILD_ID ? "941800000000000010" : "941800000000000020";
+  const messageId = guildId === GUILD_ID ? "941800000000000030" : "941800000000000040";
+  let sends = 0;
+  let edits = 0;
+  let fetches = 0;
+
+  function makeChannel(options) {
+    const channel = {
+      id: channelId,
+      name: options.name,
+      type: options.type,
+      guildId,
+      messages: {
+        fetch: async (query) => {
+          if (typeof query === "string") {
+            const message = history.get(query);
+            if (!message) throw Object.assign(new Error("unknown message"), { code: 10008 });
+            return message;
+          }
+          return history;
+        },
+      },
+      send: async (payload) => {
+        sends += 1;
+        const message = {
+          id: messageId,
+          author: { id: BOT_ID, bot: true },
+          embeds: payload.embeds.map((embed) => embed.toJSON()),
+          components: payload.components.map((row) => row.toJSON()),
+          edit: async (nextPayload) => {
+            edits += 1;
+            message.embeds = nextPayload.embeds.map((embed) => embed.toJSON());
+            message.components = nextPayload.components.map((row) => row.toJSON());
+            return message;
+          },
+        };
+        history.set(message.id, message);
+        return message;
+      },
+    };
+    return channel;
+  }
+
+  if (existingChannel) {
+    const channel = makeChannel({ name: SELF_ROLE_CHANNEL_NAME, type: 0 });
+    channelCache.set(channel.id, channel);
+  }
+
+  const guild = {
+    id: guildId,
+    members: { me: { permissions: { has: () => true } } },
     channels: {
-      fetch: async () => targetChannels,
+      fetch: async () => {
+        fetches += 1;
+        if (inventoryError) throw Object.assign(new Error("unavailable"), { code: 500 });
+        return channelCache;
+      },
       create: async (options) => {
-        created.push(options);
-        const channel = { id: "941800000000000010", ...options };
-        targetChannels.set(channel.id, channel);
+        createdChannels.push(options);
+        const channel = makeChannel(options);
+        channelCache.set(channel.id, channel);
         return channel;
       },
     },
-    roles: {
-      fetch: async () => {
-        throw new Error("stop after target-channel check");
-      },
-    },
   };
-  const otherGuild = {
-    id: "941800000000000011",
-    channels: {
-      fetch: async () => {
-        otherFetches += 1;
-        return new Collection();
-      },
-    },
+
+  return {
+    guild,
+    channelCache,
+    createdChannels,
+    get sends() { return sends; },
+    get edits() { return edits; },
+    get fetches() { return fetches; },
+    get panel() { return history.get(messageId) ?? null; },
   };
+}
+
+test("startup provisions the sole connected server without fetching the onboarding channel", async (t) => {
+  const { store } = makeFixture(t);
+  const target = makeProvisioningGuild(GUILD_ID);
   const listeners = new Map();
   const client = {
     user: { id: BOT_ID },
-    guilds: { cache: new Collection([[GUILD_ID, targetGuild], [otherGuild.id, otherGuild]]) },
-    channels: {
-      fetch: async (channelId) => {
-        assert.equal(channelId, ONBOARDING_CHANNEL_ID);
-        return { guildId: GUILD_ID, guild: targetGuild };
-      },
-    },
+    guilds: { cache: new Collection([[GUILD_ID, target.guild]]) },
     once: (event, handler) => listeners.set(event, handler),
     on: (event, handler) => listeners.set(event, handler),
   };
-
   attachSelfRoleSystem(client, { store });
-  const originalConsoleError = console.error;
-  console.error = () => {};
-  try {
-    await listeners.get(Events.ClientReady)();
-  } finally {
-    console.error = originalConsoleError;
-  }
-  listeners.get(Events.GuildCreate)(otherGuild);
+  await listeners.get(Events.ClientReady)();
+  await provisionGuild(target.guild, client, store);
 
-  assert.equal(created.length, 1);
-  assert.equal(otherFetches, 0);
+  assert.equal(target.createdChannels.length, 1);
+  assert.equal(target.createdChannels[0].name, SELF_ROLE_CHANNEL_NAME);
+  assert.equal(target.sends, 1);
+  assert.equal(target.edits, 1);
+  assert.equal(target.panel.embeds[0].footer.text, SELF_ROLE_EMBED_FOOTER);
+  assert.equal(target.panel.components[0].components.length, 5);
+  assert.equal(store.getGuild(GUILD_ID).channelId, target.channelCache.first().id);
+});
+
+test("target selection fails closed when multiple guilds have no unique self-role channel", async () => {
+  const first = makeProvisioningGuild(GUILD_ID);
+  const second = makeProvisioningGuild("941800000000000011");
+  const client = { guilds: { cache: new Collection([[GUILD_ID, first.guild], [second.guild.id, second.guild]]) } };
+
+  assert.equal(await resolveTargetGuild(client), null);
+  assert.equal(first.createdChannels.length, 0);
+  assert.equal(second.createdChannels.length, 0);
+  assert.equal(first.fetches, 1);
+  assert.equal(second.fetches, 1);
+});
+
+test("target selection uses the only guild with an existing self-role channel", async () => {
+  const other = makeProvisioningGuild(GUILD_ID);
+  const target = makeProvisioningGuild("941800000000000011", { existingChannel: true });
+  const client = { guilds: { cache: new Collection([[GUILD_ID, other.guild], [target.guild.id, target.guild]]) } };
+
+  assert.equal(await resolveTargetGuild(client), target.guild);
+  assert.equal(other.createdChannels.length, 0);
+  assert.equal(target.createdChannels.length, 0);
+});
+
+test("target selection fails closed when any guild channel inventory cannot be checked", async () => {
+  const first = makeProvisioningGuild(GUILD_ID);
+  const second = makeProvisioningGuild("941800000000000011", { existingChannel: true, inventoryError: true });
+  const client = { guilds: { cache: new Collection([[GUILD_ID, first.guild], [second.guild.id, second.guild]]) } };
+
+  assert.equal(await resolveTargetGuild(client), null);
+  assert.equal(first.createdChannels.length, 0);
+  assert.equal(second.createdChannels.length, 0);
 });
